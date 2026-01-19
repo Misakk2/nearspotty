@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-const genAI = new GoogleGenerativeAI(process.env.NEXT_PUBLIC_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "");
+const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "";
+if (!apiKey) {
+    console.warn("GEMINI_API_KEY is missing in the environment");
+}
+const genAI = new GoogleGenerativeAI(apiKey);
 
 export async function POST(req: Request) {
     try {
@@ -14,7 +18,7 @@ export async function POST(req: Request) {
             similarCount: 847
         };
 
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
+        const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" });
 
         const prompt = `
             Analyze restaurant pricing data for:
@@ -41,7 +45,13 @@ export async function POST(req: Request) {
             { "recommendedDeposit": number, "reasoning": string, "projectedNoShowRate": number, "projectedBookingRate": number }
         `;
 
-        const result = await model.generateContent(prompt);
+        let result;
+        try {
+            result = await model.generateContent(prompt);
+        } catch (aiError) {
+            console.error("AI Generation specific error:", aiError);
+            throw aiError;
+        }
         const response = result.response.text();
 
         // Extract JSON from response (handling potential markdown formatting)

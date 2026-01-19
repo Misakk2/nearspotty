@@ -28,6 +28,15 @@ const DIETARY_OPTIONS = [
 
 const CUISINE_OPTIONS = ["Italian", "Mexican", "Japanese", "Indian", "Chinese", "Thai", "American", "Mediterranean"];
 
+// Business cuisine options with more variety
+const BUSINESS_CUISINE_OPTIONS = [
+    "Italian", "French", "Mediterranean", "Greek", "Spanish",
+    "American", "Mexican", "Brazilian", "Peruvian",
+    "Japanese", "Chinese", "Thai", "Vietnamese", "Indian", "Korean",
+    "Middle Eastern", "Turkish", "Moroccan",
+    "Vegetarian/Vegan", "Seafood", "Steakhouse", "Fusion",
+];
+
 function OnboardingForm() {
     const { user } = useAuth();
     const router = useRouter();
@@ -48,7 +57,8 @@ function OnboardingForm() {
         radius: 5,
         restaurantName: "",
         restaurantAddress: "",
-        cuisine: "Mediterranean",
+        cuisineTypes: [] as string[], // Multiple cuisine selection for business
+        customCuisine: "", // Custom cuisine if "Other" is selected
         city: "Bratislava",
         avgCheck: 25,
     });
@@ -80,6 +90,12 @@ function OnboardingForm() {
     const handleSubmit = async () => {
         if (!user) return;
         setLoading(true);
+
+        // Combine selected cuisines with custom cuisine if provided
+        const allCuisines = formData.customCuisine
+            ? [...formData.cuisineTypes, formData.customCuisine]
+            : formData.cuisineTypes;
+
         try {
             await setDoc(doc(db, "users", user.uid), {
                 role: formData.role,
@@ -94,7 +110,7 @@ function OnboardingForm() {
                     name: formData.restaurantName,
                     address: formData.restaurantAddress,
                     location: formData.city,
-                    cuisine: formData.cuisine,
+                    cuisineTypes: allCuisines,
                     avgCheck: formData.avgCheck || 25,
                     createdAt: new Date().toISOString()
                 } : null
@@ -102,7 +118,7 @@ function OnboardingForm() {
 
             toast.success("Onboarding completed!");
 
-            // If it's a paid business plan, redirect to checkout
+            // If it's a paid business plan, redirect to checkout with timeout
             if (formData.role === "owner" && userPlan && userPlan !== "free") {
                 const planToPrice: Record<string, string> = {
                     'basic': 'price_1SqB26JCjItbR3I2jk3D6ULu',
@@ -112,21 +128,72 @@ function OnboardingForm() {
 
                 const priceId = planToPrice[userPlan as keyof typeof planToPrice];
                 if (priceId) {
+                    // Attempt checkout with timeout
+                    const attemptCheckout = async (attempt: number): Promise<boolean> => {
+                        const controller = new AbortController();
+                        const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+                        try {
+                            const res = await fetch("/api/checkout", {
+                                method: "POST",
+                                body: JSON.stringify({
+                                    userId: user.uid,
+                                    userEmail: user.email,
+                                    priceId: priceId,
+                                    planName: userPlan
+                                }),
+                                signal: controller.signal
+                            });
+                            clearTimeout(timeoutId);
+
+                            const data = await res.json();
+                            if (data.url) {
+                                window.location.href = data.url;
+                                return true;
+                            }
+                            return false;
+                        } catch (error) {
+                            clearTimeout(timeoutId);
+                            console.error(`Checkout attempt ${attempt} failed:`, error);
+                            return false;
+                        }
+                    };
+
                     toast.loading("Redirecting to checkout...");
-                    const res = await fetch("/api/checkout", {
-                        method: "POST",
-                        body: JSON.stringify({
-                            userId: user.uid,
-                            userEmail: user.email,
-                            priceId: priceId,
-                            planName: userPlan
-                        })
-                    });
-                    const data = await res.json();
-                    if (data.url) {
-                        window.location.href = data.url;
+
+                    // First attempt
+                    let success = await attemptCheckout(1);
+
+                    if (!success) {
+                        toast.dismiss();
+                        toast.error("Connection slow. Retrying...");
+                        // Second attempt
+                        success = await attemptCheckout(2);
+                    }
+
+                    if (!success) {
+                        toast.dismiss();
+                        toast.error("We're having issues. Please try again or contact support.");
+
+                        // Send support email notification (best effort)
+                        try {
+                            await fetch("/api/support-alert", {
+                                method: "POST",
+                                body: JSON.stringify({
+                                    type: "checkout_failure",
+                                    userId: user.uid,
+                                    userEmail: user.email,
+                                    plan: userPlan
+                                })
+                            });
+                        } catch {
+                            console.error("Failed to send support alert");
+                        }
+
+                        setLoading(false);
                         return;
                     }
+                    return; // Success - redirecting to checkout
                 }
             }
 
@@ -249,12 +316,41 @@ function OnboardingForm() {
                                         </div>
                                     </div>
                                     <div className="space-y-2">
-                                        <Label htmlFor="cuisine">Cuisine Type</Label>
+                                        <Label>Cuisine Types (select all that apply)</Label>
+                                        <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto p-2 border rounded-lg bg-gray-50">
+                                            {BUSINESS_CUISINE_OPTIONS.map((cuisine) => {
+                                                const isSelected = formData.cuisineTypes.includes(cuisine);
+                                                return (
+                                                    <button
+                                                        key={cuisine}
+                                                        type="button"
+                                                        onClick={() => {
+                                                            const current = formData.cuisineTypes;
+                                                            updateFormData(
+                                                                "cuisineTypes",
+                                                                isSelected
+                                                                    ? current.filter(c => c !== cuisine)
+                                                                    : [...current, cuisine]
+                                                            );
+                                                        }}
+                                                        className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${isSelected
+                                                                ? 'bg-primary text-white border-primary'
+                                                                : 'bg-white border-gray-200 hover:border-primary/50'
+                                                            }`}
+                                                    >
+                                                        {cuisine}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label htmlFor="customCuisine">Other Cuisine (optional)</Label>
                                         <Input
-                                            id="cuisine"
-                                            placeholder="Italian"
-                                            value={formData.cuisine}
-                                            onChange={(e) => updateFormData("cuisine", e.target.value)}
+                                            id="customCuisine"
+                                            placeholder="e.g. Ethiopian, Georgian..."
+                                            value={formData.customCuisine}
+                                            onChange={(e) => updateFormData("customCuisine", e.target.value)}
                                         />
                                     </div>
                                 </div>

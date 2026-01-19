@@ -19,16 +19,23 @@ export default function Navbar() {
         try {
             await signOut(auth);
             toast.success("Logged out successfully");
+            window.location.href = "/"; // Force full reload to clear state
         } catch (error) {
-            console.error("Logout error:", error);
-            toast.error("Failed to log out");
+            console.error("Logout error details:", error);
+            // Even if signout fails (e.g. connectivity), we should clear local state if possible
+            // or at least notify the user more clearly
+            toast.error("Failed to log out. Please refresh the page.");
         }
     };
+
+    const homePath = user
+        ? (userRole === "owner" ? "/dashboard" : "/search")
+        : "/";
 
     return (
         <header className="px-6 h-20 flex items-center justify-between border-b sticky top-0 bg-white/80 backdrop-blur-xl z-50">
             <div className="flex items-center gap-8">
-                <Link href="/" className="flex items-center gap-2">
+                <Link href={homePath} className="flex items-center gap-2">
                     <div className="h-10 w-10 bg-primary rounded-xl flex items-center justify-center shadow-lg shadow-primary/20">
                         <Utensils className="h-6 w-6 text-white" />
                     </div>
@@ -39,7 +46,7 @@ export default function Navbar() {
                 </Link>
 
                 <nav className="hidden lg:flex items-center gap-1 bg-gray-100 p-1 rounded-full">
-                    <Link href="/">
+                    <Link href={homePath}>
                         <Button
                             variant={!isBusinessPage ? "default" : "ghost"}
                             size="sm"
@@ -96,7 +103,7 @@ export default function Navbar() {
                                     </Button>
                                 </Link>
                             </>
-                        ) : (
+                        ) : userRole === 'diner' ? (
                             <>
                                 <Link href="/profile">
                                     <Button variant={pathname === "/profile" ? "default" : "ghost"} className="font-bold flex items-center gap-2">
@@ -110,6 +117,13 @@ export default function Navbar() {
                                     </Button>
                                 </Link>
                             </>
+                        ) : (
+                            // 'no_role' or 'loading'
+                            <Link href="/onboarding">
+                                <Button variant="outline" className="border-primary text-primary font-bold hover:bg-primary/5">
+                                    Complete Setup
+                                </Button>
+                            </Link>
                         )}
                         <Button variant="outline" size="icon" onClick={handleLogout} className="rounded-full bg-red-50 hover:bg-red-100 border-red-100 text-red-600 transition-colors">
                             <LogOut className="h-4 w-4" />

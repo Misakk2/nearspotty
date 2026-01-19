@@ -147,7 +147,7 @@ export default function ForRestaurantsPage() {
                     cta="Claim Your Free Listing"
                     link="/signup?role=owner&redirect=/dashboard"
                     secondaryCTA="Contact Support"
-                    secondaryLink="mailto:support@nearspotty.com"
+                    secondaryLink="mailto:support@nearspotty.online"
                 />
             </main>
 

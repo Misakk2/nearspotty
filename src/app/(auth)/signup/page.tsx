@@ -53,7 +53,11 @@ function SignupForm() {
             await saveUser({ ...userCredential.user, displayName: name });
 
             toast.success("Account created successfully!");
-            router.push("/onboarding");
+            // Pass role to onboarding to skip role selection for business users
+            const onboardingUrl = initialRole === "owner"
+                ? "/onboarding?role=owner"
+                : "/onboarding";
+            router.push(onboardingUrl);
         } catch (error: unknown) {
             console.error(error);
             const message = error instanceof Error ? error.message : "Failed to create account";
@@ -69,7 +73,11 @@ function SignupForm() {
             const provider = new GoogleAuthProvider();
             const result = await signInWithPopup(auth, provider);
             await saveUser(result.user);
-            router.push("/onboarding");
+            // Pass role to onboarding to skip role selection for business users
+            const onboardingUrl = initialRole === "owner"
+                ? "/onboarding?role=owner"
+                : "/onboarding";
+            router.push(onboardingUrl);
         } catch (error: unknown) {
             console.error(error);
             const message = error instanceof Error ? error.message : "Failed to sign up with Google";

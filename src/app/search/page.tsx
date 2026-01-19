@@ -1,6 +1,7 @@
 "use client";
 import Map from "@/components/search/map";
 import ProtectedRoute from "@/components/protected-route";
+import RoleGuard from "@/components/RoleGuard";
 import PlaceCard from "@/components/search/place-card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -158,71 +159,73 @@ export default function SearchPage() {
 
     return (
         <ProtectedRoute>
-            <div className="flex flex-col h-screen max-h-screen">
-                {/* Header */}
-                <header className="h-16 border-b flex items-center px-4 gap-4 bg-background z-10 shrink-0">
-                    <div className="font-bold text-xl tracking-tight hidden md:block text-primary">NearSpotty</div>
-                    <form onSubmit={handleSearch} className="flex-1 max-w-xl flex gap-2">
-                        <div className="relative flex-1">
-                            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                            <Input
-                                placeholder="Restaurants, cafes, vegan..."
-                                className="pl-9 bg-gray-50 dark:bg-gray-800 border-none"
-                                value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
-                            />
-                        </div>
-                        <Button type="submit" size="icon" variant="ghost" disabled={loading}>
-                            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-                        </Button>
-                    </form>
-                    <Button variant="outline" size="sm" className="hidden sm:flex" onClick={handleUseLocation}>
-                        <MapPin className="mr-2 h-4 w-4" /> Use my location
-                    </Button>
-                </header>
-
-                {/* Main Content: Split Map/List */}
-                <div className="flex-1 flex overflow-hidden relative">
-                    {/* List View */}
-                    <div className="w-full md:w-[400px] lg:w-[450px] border-r bg-background overflow-y-auto flex flex-col p-4 gap-4 shrink-0 z-10 shadow-xl md:shadow-none absolute md:relative bottom-0 h-1/2 md:h-full rounded-t-2xl md:rounded-none bg-white/90 backdrop-blur-sm md:bg-background">
-                        <div className="flex justify-between items-center pb-2 sticky top-0 bg-inherit z-20">
-                            <h2 className="font-semibold text-lg">Results</h2>
-                            <span className="text-xs text-muted-foreground">{places.length} found</span>
-                        </div>
-
-                        {places.length === 0 && !loading && (
-                            <div className="flex-1 flex flex-col items-center justify-center text-center p-8 text-muted-foreground space-y-2">
-                                <Search className="h-12 w-12 opacity-20" />
-                                <p>Search for a place or use your location to find safe eats!</p>
+            <RoleGuard allowedRole="diner">
+                <div className="flex flex-col h-screen max-h-screen">
+                    {/* Header */}
+                    <header className="h-16 border-b flex items-center px-4 gap-4 bg-background z-10 shrink-0">
+                        <div className="font-bold text-xl tracking-tight hidden md:block text-primary">NearSpotty</div>
+                        <form onSubmit={handleSearch} className="flex-1 max-w-xl flex gap-2">
+                            <div className="relative flex-1">
+                                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                                <Input
+                                    placeholder="Restaurants, cafes, vegan..."
+                                    className="pl-9 bg-gray-50 dark:bg-gray-800 border-none"
+                                    value={searchQuery}
+                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                />
                             </div>
-                        )}
+                            <Button type="submit" size="icon" variant="ghost" disabled={loading}>
+                                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                            </Button>
+                        </form>
+                        <Button variant="outline" size="sm" className="hidden sm:flex" onClick={handleUseLocation}>
+                            <MapPin className="mr-2 h-4 w-4" /> Use my location
+                        </Button>
+                    </header>
 
-                        {loading && places.length === 0 && (
-                            <div className="flex justify-center p-8"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>
-                        )}
+                    {/* Main Content: Split Map/List */}
+                    <div className="flex-1 flex overflow-hidden relative">
+                        {/* List View */}
+                        <div className="w-full md:w-[400px] lg:w-[450px] border-r bg-background overflow-y-auto flex flex-col p-4 gap-4 shrink-0 z-10 shadow-xl md:shadow-none absolute md:relative bottom-0 h-1/2 md:h-full rounded-t-2xl md:rounded-none bg-white/90 backdrop-blur-sm md:bg-background">
+                            <div className="flex justify-between items-center pb-2 sticky top-0 bg-inherit z-20">
+                                <h2 className="font-semibold text-lg">Results</h2>
+                                <span className="text-xs text-muted-foreground">{places.length} found</span>
+                            </div>
 
-                        <div className="space-y-4 pb-20 md:pb-0">
-                            {places.map((place) => (
-                                <div key={place.place_id} id={`place-${place.place_id}`} className={`transition-all duration-300 rounded-lg ${selectedPlaceId === place.place_id ? 'ring-2 ring-primary shadow-lg scale-[1.02]' : ''}`}>
-                                    <PlaceCard
-                                        place={place}
-                                        preferences={preferences}
-                                        onClick={() => {
-                                            setSelectedPlaceId(place.place_id);
-                                            mapInstance?.panTo(place.geometry.location);
-                                        }}
-                                    />
+                            {places.length === 0 && !loading && (
+                                <div className="flex-1 flex flex-col items-center justify-center text-center p-8 text-muted-foreground space-y-2">
+                                    <Search className="h-12 w-12 opacity-20" />
+                                    <p>Search for a place or use your location to find safe eats!</p>
                                 </div>
-                            ))}
-                        </div>
-                    </div>
+                            )}
 
-                    {/* Map View */}
-                    <div className="flex-1 bg-gray-100 relative h-full">
-                        <Map className="absolute inset-0" onLoad={setMapInstance} />
+                            {loading && places.length === 0 && (
+                                <div className="flex justify-center p-8"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>
+                            )}
+
+                            <div className="space-y-4 pb-20 md:pb-0">
+                                {places.map((place) => (
+                                    <div key={place.place_id} id={`place-${place.place_id}`} className={`transition-all duration-300 rounded-lg ${selectedPlaceId === place.place_id ? 'ring-2 ring-primary shadow-lg scale-[1.02]' : ''}`}>
+                                        <PlaceCard
+                                            place={place}
+                                            preferences={preferences}
+                                            onClick={() => {
+                                                setSelectedPlaceId(place.place_id);
+                                                mapInstance?.panTo(place.geometry.location);
+                                            }}
+                                        />
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Map View */}
+                        <div className="flex-1 bg-gray-100 relative h-full">
+                            <Map className="absolute inset-0" onLoad={setMapInstance} />
+                        </div>
                     </div>
                 </div>
-            </div>
+            </RoleGuard>
         </ProtectedRoute>
     );
 }

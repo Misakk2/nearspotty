@@ -24,16 +24,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     useEffect(() => {
         const unsubscribe = onAuthStateChanged(auth, async (user) => {
-            setUser(user);
-            if (user) {
-                const userDoc = await getDoc(doc(db, "users", user.uid));
-                if (userDoc.exists()) {
-                    setUserRole(userDoc.data().role || "diner");
+            try {
+                setUser(user);
+                if (user) {
+                    const userDoc = await getDoc(doc(db, "users", user.uid));
+                    if (userDoc.exists()) {
+                        setUserRole(userDoc.data().role || "diner");
+                    } else {
+                        // User exists in Auth but not in Firestore yet
+                        setUserRole("no_role");
+                    }
+                } else {
+                    setUserRole(null);
                 }
-            } else {
-                setUserRole(null);
+            } catch (error) {
+                console.error("Auth Provider Error:", error);
+                setUserRole("error");
+            } finally {
+                setLoading(false);
             }
-            setLoading(false);
         });
 
         return () => unsubscribe();

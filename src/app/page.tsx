@@ -1,3 +1,9 @@
+"use client";
+
+import { useEffect } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useAuth } from "@/components/auth-provider";
 import { Hero } from "@/components/landing/Hero";
 import { HowItWorks, Features } from "@/components/landing/Sections";
 import { ProblemSolution } from "@/components/landing/ProblemSolution";
@@ -5,8 +11,46 @@ import { DietaryNeeds } from "@/components/landing/DietaryNeeds";
 import { Testimonials } from "@/components/landing/Marketing";
 import { CTASection } from "@/components/landing/FinalSections";
 import { Footer } from "@/components/landing/Footer";
+import { Loader2 } from "lucide-react";
 
 export default function Home() {
+  const { user, userRole, loading } = useAuth();
+  const router = useRouter();
+
+  // Redirect logged-in users to their appropriate page
+  useEffect(() => {
+    if (!loading && user) {
+      if (userRole === "owner") {
+        router.push("/dashboard");
+      } else if (userRole === "diner") {
+        router.push("/search");
+      } else if (userRole === "no_role") {
+        // New user or interrupted onboarding
+        router.push("/onboarding");
+      }
+    }
+  }, [user, userRole, loading, router]);
+
+  // Show loading while checking auth or redirecting
+  if (loading || (user && userRole !== "error")) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        {user && (
+          <div className="text-center animate-in fade-in duration-700">
+            <p className="text-sm text-muted-foreground font-medium">Redirecting you to your workspace...</p>
+            <Link
+              href={userRole === "owner" ? "/dashboard" : (userRole === "diner" ? "/search" : "/onboarding")}
+              className="mt-4 text-xs text-primary underline block"
+            >
+              Click here if you are not redirected automatically
+            </Link>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   const steps = [
     { title: "Tell Us Your Diet", subtitle: "Vegan, gluten-free, lactose-intolerant? Set your preferences once.", icon: "checklist" as const },
     { title: "AI Finds Perfect Matches", subtitle: "Gemini 3 analyzes thousands of reviews to score restaurants for YOU.", icon: "sparkle" as const },

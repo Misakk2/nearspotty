@@ -23,9 +23,8 @@ const DIETARY_OPTIONS = [
 ];
 
 export default function ProfilePage() {
-    const { user } = useAuth();
+    const { user, userRole } = useAuth();
     const [loading, setLoading] = useState(false);
-    const [userRole, setUserRole] = useState<string | null>(null);
     const [dietary, setDietary] = useState<string[]>([]);
     const [allergies, setAllergies] = useState("");
     const router = useRouter();
@@ -35,7 +34,6 @@ export default function ProfilePage() {
             getDoc(doc(db, "users", user.uid)).then(snap => {
                 if (snap.exists()) {
                     const data = snap.data();
-                    setUserRole(data.role || "diner");
                     setDietary(data.preferences?.dietary || []);
                     setAllergies(data.preferences?.allergies || "");
                 }
@@ -146,18 +144,19 @@ export default function ProfilePage() {
                         <CardHeader>
                             <CardTitle>Shortcuts</CardTitle>
                         </CardHeader>
-                        <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            {userRole === "owner" && (
-                                <Link href="/dashboard" className="p-6 rounded-3xl border-2 border-green-50 bg-green-50/20 hover:bg-green-50/40 transition-all text-center group">
+                        <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {userRole === "owner" ? (
+                                <Link href="/dashboard" className="p-6 rounded-3xl border-2 border-green-50 bg-green-50/20 hover:bg-green-50/40 transition-all text-center group col-span-full">
                                     <LayoutDashboard className="h-8 w-8 text-green-600 mx-auto mb-3 group-hover:scale-110 transition-transform" />
                                     <p className="font-bold text-green-700">Business Dashboard</p>
                                 </Link>
+                            ) : (
+                                <Link href="/reservations" className="p-6 rounded-3xl border-2 border-gray-50 bg-gray-50/20 hover:bg-gray-50/40 transition-all text-center group">
+                                    <Calendar className="h-8 w-8 text-primary mx-auto mb-3 group-hover:scale-110 transition-transform" />
+                                    <p className="font-bold text-gray-700">My Reservations</p>
+                                </Link>
                             )}
-                            <Link href="/reservations" className="p-6 rounded-3xl border-2 border-gray-50 bg-gray-50/20 hover:bg-gray-50/40 transition-all text-center group">
-                                <Calendar className="h-8 w-8 text-primary mx-auto mb-3 group-hover:scale-110 transition-transform" />
-                                <p className="font-bold text-gray-700">My Reservations</p>
-                            </Link>
-                            <Link href="/subscription" className="p-6 rounded-3xl border-2 border-gray-50 bg-gray-50/20 hover:bg-gray-50/40 transition-all text-center group">
+                            <Link href="/subscription" className={`p-6 rounded-3xl border-2 border-gray-50 bg-gray-50/20 hover:bg-gray-50/40 transition-all text-center group ${userRole === 'owner' ? 'col-span-full' : ''}`}>
                                 <CreditCard className="h-8 w-8 text-primary mx-auto mb-3 group-hover:scale-110 transition-transform" />
                                 <p className="font-bold text-gray-700">Subscription</p>
                             </Link>

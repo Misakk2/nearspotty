@@ -6,10 +6,20 @@ const serviceAccountKey = process.env.FIREBASE_ADMIN_PRIVATE_KEY;
 
 let adminApp;
 
+if (process.env.NODE_ENV === "development") {
+    // If running in development and not already set, default to local emulator ports
+    if (!process.env.FIRESTORE_EMULATOR_HOST) {
+        process.env.FIRESTORE_EMULATOR_HOST = "127.0.0.1:8080";
+        console.log("Admin SDK: Using Firestore Emulator at 127.0.0.1:8080");
+    }
+    if (!process.env.FIREBASE_AUTH_EMULATOR_HOST) {
+        process.env.FIREBASE_AUTH_EMULATOR_HOST = "127.0.0.1:9099";
+        console.log("Admin SDK: Using Auth Emulator at 127.0.0.1:9099");
+    }
+}
+
 if (!getApps().length) {
     if (serviceAccountKey) {
-        // If we have a service account key (local dev usage usually), use it.
-        // Assuming FIREBASE_ADMIN_PRIVATE_KEY contains the JSON string of the service account
         try {
             const serviceAccount = JSON.parse(serviceAccountKey) as ServiceAccount;
             adminApp = initializeApp({
@@ -17,12 +27,9 @@ if (!getApps().length) {
             });
         } catch (e) {
             console.error("Failed to parse FIREBASE_ADMIN_PRIVATE_KEY", e);
-            // Fallback to default creds or empty init which works in Cloud Functions environment automatically
             adminApp = initializeApp();
         }
     } else {
-        // In Cloud Functions or if no key provided, let Firebase Admin discover credentials 
-        // (GOOGLE_APPLICATION_CREDENTIALS or metadata server)
         adminApp = initializeApp();
     }
 } else {
