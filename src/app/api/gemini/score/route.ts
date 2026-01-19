@@ -4,7 +4,7 @@ import { adminDb } from "@/lib/firebase-admin";
 import crypto from "crypto";
 
 const genAI = new GoogleGenerativeAI(process.env.NEXT_PUBLIC_GEMINI_API_KEY || "");
-const model = genAI.getGenerativeModel({ model: "gemini-flash" });
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
 
 // Cache validity duration: 30 days
 const CACHE_DURATION_MS = 30 * 24 * 60 * 60 * 1000;

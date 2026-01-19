@@ -25,8 +25,8 @@ if (process.env.NODE_ENV === "development") {
   // Only connect if not already connected (to avoid errors on hot reload)
   // Check typical emulator ports or internal flags if necessary, but standard check is environment
   try {
-    connectAuthEmulator(auth, "http://localhost:9099", { disableWarnings: true });
-    connectFirestoreEmulator(db, "localhost", 8080);
+    connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
+    connectFirestoreEmulator(db, "127.0.0.1", 8080);
   } catch (e) {
     console.log("Emulators already connected or failed to connect", e);
   }

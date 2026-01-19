@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createUserWithEmailAndPassword, updateProfile, signInWithPopup, GoogleAuthProvider, User } from "firebase/auth";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
@@ -11,9 +11,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import toast, { Toaster } from "react-hot-toast";
+import { Suspense } from "react";
 
-export default function SignupPage() {
+function SignupForm() {
     const router = useRouter();
+    const searchParams = useSearchParams();
+    const initialRole = searchParams.get("role") || "user";
+    const initialPlan = searchParams.get("plan") || "free";
     const [loading, setLoading] = useState(false);
 
     const saveUser = async (user: User) => {
@@ -23,7 +27,8 @@ export default function SignupPage() {
                 email: user.email,
                 displayName: user.displayName,
                 photoURL: user.photoURL,
-                role: 'user',
+                role: initialRole,
+                plan: initialPlan,
                 createdAt: serverTimestamp(),
             }, { merge: true });
         } catch (e) {
@@ -119,3 +124,12 @@ export default function SignupPage() {
         </Card>
     );
 }
+
+export default function SignupPage() {
+    return (
+        <Suspense fallback={<div className="flex items-center justify-center p-8">Loading...</div>}>
+            <SignupForm />
+        </Suspense>
+    );
+}
+

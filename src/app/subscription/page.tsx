@@ -7,15 +7,55 @@ import { Badge } from "@/components/ui/badge";
 import { Check, Sparkles, Zap, Shield, Star } from "lucide-react";
 import { useAuth } from "@/components/auth-provider";
 import ProtectedRoute from "@/components/protected-route";
+import toast, { Toaster } from "react-hot-toast";
+import { doc, getDoc } from "firebase/firestore";
+import { db } from "@/lib/firebase";
+import { useEffect } from "react";
 
 export default function SubscriptionPage() {
-    const { } = useAuth();
+    const { user } = useAuth();
     const [loading, setLoading] = useState(false);
+    const [userRole, setUserRole] = useState<string | null>(null);
 
-    const handleUpgrade = () => {
+    useEffect(() => {
+        if (user) {
+            getDoc(doc(db, "users", user.uid)).then(snap => {
+                if (snap.exists()) {
+                    setUserRole(snap.data().role || "diner");
+                }
+            });
+        }
+    }, [user]);
+
+    const handleUpgrade = async () => {
+        if (!user) {
+            toast.error("Please log in to upgrade");
+            return;
+        }
         setLoading(true);
-        // Generated Payment Link
-        window.location.href = "https://buy.stripe.com/test_fZu28sgdl2CyepC2irawo00";
+        try {
+            const response = await fetch("/api/checkout", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    userId: user.uid,
+                    userEmail: user.email,
+                    priceId: "price_1SrDsEJCjItbR3I2XqbPKHZk", // Premium Subscription Price ID (9.99 EUR)
+                }),
+            });
+            const data = await response.json();
+            if (data.url) {
+                window.location.href = data.url;
+            } else {
+                throw new Error(data.error || "Failed to create checkout session");
+            }
+        } catch (error) {
+            console.error("Upgrade Error:", error);
+            const errorMessage = error instanceof Error ? error.message : "Something went wrong";
+            toast.error(errorMessage);
+        } finally {
+            setLoading(false);
+        }
     };
 
     const features = [
@@ -29,6 +69,7 @@ export default function SubscriptionPage() {
     return (
         <ProtectedRoute>
             <div className="min-h-screen bg-gray-50 py-12 px-4">
+                <Toaster position="top-center" />
                 <div className="max-w-4xl mx-auto space-y-8 text-center">
                     <div className="space-y-4">
                         <Badge className="bg-primary/10 text-primary hover:bg-primary/20 border-none px-4 py-1 text-sm font-semibold">
@@ -100,8 +141,12 @@ export default function SubscriptionPage() {
                                 </ul>
                             </CardContent>
                             <CardFooter>
-                                <Button className="w-full shadow-lg h-12 text-lg font-bold" onClick={handleUpgrade} disabled={loading}>
-                                    Upgrade to Premium
+                                <Button
+                                    className="w-full shadow-lg h-12 text-lg font-bold"
+                                    onClick={handleUpgrade}
+                                    disabled={loading || userRole === "premium"}
+                                >
+                                    {userRole === "premium" ? "Already Premium" : (loading ? "Processing..." : "Upgrade to Premium")}
                                 </Button>
                             </CardFooter>
                         </Card>

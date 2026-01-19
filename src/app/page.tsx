@@ -1,111 +1,99 @@
-import Link from "next/link";
-import { Button } from "@/components/ui/button";
-import { ArrowRight, Utensils, Search, CheckCircle } from "lucide-react";
+import { Hero } from "@/components/landing/Hero";
+import { HowItWorks, Features } from "@/components/landing/Sections";
+import { ProblemSolution } from "@/components/landing/ProblemSolution";
+import { DietaryNeeds } from "@/components/landing/DietaryNeeds";
+import { Testimonials } from "@/components/landing/Marketing";
+import { CTASection } from "@/components/landing/FinalSections";
+import { Footer } from "@/components/landing/Footer";
 
 export default function Home() {
+  const steps = [
+    { title: "Tell Us Your Diet", subtitle: "Vegan, gluten-free, lactose-intolerant? Set your preferences once.", icon: "checklist" as const },
+    { title: "AI Finds Perfect Matches", subtitle: "Gemini 3 analyzes thousands of reviews to score restaurants for YOU.", icon: "sparkle" as const },
+    { title: "Reserve in One Tap", subtitle: "See only open places. Book instantly. Stress-free dining.", icon: "calendar" as const },
+  ];
+
+  const painPoints = [
+    { icon: "closed", text: "Scrolling through 50 closed restaurants at 10 PM" },
+    { icon: "reading", text: "Reading 200 reviews to find 'maybe vegan-friendly'" },
+    { icon: "hungry", text: "Arriving hungry, leaving disappointed" },
+  ];
+
+  const features = [
+    { icon: "scoring", title: "Smart Dietary Scoring", description: "AI reads reviews like a friend. 'They modified my pasta for allergies' = 4.8/5 safety score." },
+    { icon: "availability", title: "Real-Time Availability", description: "Only see restaurants open NOW. No more closed kitchen surprises." },
+    { icon: "recommendation", title: "Personalized Dish Recommendations", description: "Gemini 3 suggests: 'Try the quinoa burger – reviewers with your diet loved it.'" },
+    { icon: "reservation", title: "One-Tap Reservations", description: "Book your table in 10 seconds. Confirmation email instant." },
+  ];
+
+  const diets = ["Vegan", "Vegetarian", "Lactose-Free", "Gluten-Free", "Kosher", "Halal", "Nut Allergies", "Keto", "Paleo"];
+
+  const testimonials = [
+    { quote: "Finally! An app that gets my dietary restrictions. Found a perfect vegan spot in 30 seconds.", author: "Sarah K., Prague" },
+    { quote: "Traveling for business with celiac disease was stressful. NearSpotty shows me safe options instantly.", author: "Marco L., Bratislava" },
+    { quote: "As a restaurant owner, NearSpotty connects us with customers actively looking for our kosher menu.", author: "David R., Vienna" },
+  ];
+
   return (
     <div className="flex min-h-screen flex-col">
-      <header className="px-6 h-16 flex items-center justify-between border-b sticky top-0 bg-background/95 backdrop-blur z-50">
-        <div className="flex items-center gap-2">
-          <div className="h-8 w-8 bg-primary rounded-lg flex items-center justify-center">
-            <Utensils className="h-5 w-5 text-white" />
-          </div>
-          <span className="font-bold text-xl tracking-tight">NearSpotty</span>
-        </div>
-        <nav className="hidden md:flex gap-6">
-          <Link href="#how-it-works" className="text-sm font-medium hover:text-primary transition-colors">
-            How it Works
-          </Link>
-          <Link href="/signin" className="text-sm font-medium hover:text-primary transition-colors">
-            For Restaurants
-          </Link>
-        </nav>
-        <div className="flex gap-4">
-          <Link href="/login">
-            <Button variant="ghost" className="font-semibold">Log in</Button>
-          </Link>
-          <Link href="/signup">
-            <Button className="font-semibold shadow-lg shadow-primary/20">Sign up</Button>
-          </Link>
-        </div>
-      </header>
-
       <main className="flex-1">
-        {/* Hero Section */}
-        <section className="py-24 lg:py-32 px-6 text-center space-y-8 max-w-5xl mx-auto">
-          <div className="space-y-4">
-            <h1 className="text-4xl md:text-6xl font-bold tracking-tighter sm:text-5xl bg-clip-text text-transparent bg-gradient-to-r from-gray-900 to-gray-600 dark:from-white dark:to-gray-400 pb-2">
-              Find your perfect meal,<br />
-              <span className="text-primary">matched to your diet.</span>
-            </h1>
-            <p className="mx-auto max-w-[700px] text-gray-500 md:text-xl dark:text-gray-400">
-              AI-powered restaurant finder that matches you with nearby spots based on your dietary preferences. Vegan, Gluten-free, Halal—we&apos;ve got you covered.
-            </p>
-          </div>
-          <div className="flex justify-center gap-4">
-            <Link href="/signup">
-              <Button size="lg" className="h-12 px-8 text-lg shadow-xl shadow-primary/25 hover:shadow-primary/40 transition-all rounded-full">
-                Get Started
-                <ArrowRight className="ml-2 h-5 w-5" />
-              </Button>
-            </Link>
-            <Link href="#demo">
-              <Button variant="outline" size="lg" className="h-12 px-8 text-lg rounded-full">
-                View Demo
-              </Button>
-            </Link>
-          </div>
-        </section>
+        <Hero
+          title={<>Find Your Perfect Meal, <br /><span className="bg-clip-text text-transparent bg-gradient-to-r from-primary to-orange-400">Matched to Your Diet</span></>}
+          subtitle="AI-powered restaurant discovery for vegans, vegetarians, gluten-free, lactose-free, and every dietary need. Instant results. Open now. Safe for you."
+          primaryCTA="Find Restaurants Near Me"
+          primaryLink="/signup?redirect=/search"
+          secondaryCTA="For Restaurant Owners"
+          secondaryLink="/for-restaurants"
+          trustBadge="Powered by Gemini 3 AI • 1000+ Restaurants"
+        />
 
-        {/* How It Works */}
-        <section id="how-it-works" className="py-24 bg-gray-50 dark:bg-gray-900/50">
+        <HowItWorks steps={steps} />
+
+        <ProblemSolution
+          title="Tired of Guessing If You Can Eat There?"
+          painPoints={painPoints}
+          solution="NearSpotty uses Gemini 3 AI to do the work for you. Only see places that fit your diet, are open right now, and have dishes you'll love."
+        />
+
+        <Features title="Powered by Advanced AI Intelligence" features={features} />
+
+        <DietaryNeeds items={diets} />
+
+        <Testimonials testimonials={testimonials} />
+
+        <section className="py-24 bg-white border-y">
           <div className="container px-6 mx-auto">
-            <div className="text-center mb-16 space-y-2">
-              <h2 className="text-3xl font-bold tracking-tighter sm:text-4xl">How It Works</h2>
-              <p className="text-gray-500 md:text-lg">Discover safe and delicious dining in 3 simple steps.</p>
-            </div>
-
-            <div className="grid md:grid-cols-3 gap-8 max-w-5xl mx-auto">
-              {/* Step 1 */}
-              <div className="bg-background p-8 rounded-2xl shadow-sm border space-y-4 relative group hover:shadow-md transition-shadow">
-                <div className="absolute -top-6 left-8 bg-background border p-3 rounded-xl shadow-sm">
-                  <CheckCircle className="h-8 w-8 text-primary" />
-                </div>
-                <h3 className="text-xl font-bold pt-4">1. set Preferences</h3>
-                <p className="text-gray-500">Tell us your dietary needs—Vegan, Gluten-free, Allergies. We customize results just for you.</p>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-12 text-center">
+              <div className="space-y-2">
+                <p className="text-4xl md:text-5xl font-extrabold text-primary">100M+</p>
+                <p className="text-sm font-bold text-gray-500 uppercase tracking-widest">Diners in Europe</p>
               </div>
-
-              {/* Step 2 */}
-              <div className="bg-background p-8 rounded-2xl shadow-sm border space-y-4 relative group hover:shadow-md transition-shadow">
-                <div className="absolute -top-6 left-8 bg-background border p-3 rounded-xl shadow-sm">
-                  <Search className="h-8 w-8 text-secondary" />
-                </div>
-                <h3 className="text-xl font-bold pt-4">2. Find Places</h3>
-                <p className="text-gray-500">Search nearby restaurants. Our AI analyzes reviews to find the safest matches.</p>
+              <div className="space-y-2">
+                <p className="text-4xl md:text-5xl font-extrabold text-gray-900">50%</p>
+                <p className="text-sm font-bold text-gray-500 uppercase tracking-widest">Check Reviews First</p>
               </div>
-
-              {/* Step 3 */}
-              <div className="bg-background p-8 rounded-2xl shadow-sm border space-y-4 relative group hover:shadow-md transition-shadow">
-                <div className="absolute -top-6 left-8 bg-background border p-3 rounded-xl shadow-sm">
-                  <Utensils className="h-8 w-8 text-primary" />
-                </div>
-                <h3 className="text-xl font-bold pt-4">3. Eat Confidence</h3>
-                <p className="text-gray-500">View dietary scores and recommended dishes. Book a table and enjoy your meal.</p>
+              <div className="space-y-2">
+                <p className="text-4xl md:text-5xl font-extrabold text-gray-900">2.5h</p>
+                <p className="text-sm font-bold text-gray-500 uppercase tracking-widest">Average Time Wasted</p>
+              </div>
+              <div className="space-y-2">
+                <p className="text-4xl md:text-5xl font-extrabold text-gray-900">87%</p>
+                <p className="text-sm font-bold text-gray-500 uppercase tracking-widest">Report Dining Anxiety</p>
               </div>
             </div>
           </div>
         </section>
+
+        <CTASection
+          title="Ready to End Dining Stress?"
+          cta="Start Finding Restaurants"
+          link="/signup"
+          secondaryCTA="Get More Bookings"
+          secondaryLink="/for-restaurants"
+        />
       </main>
 
-      <footer className="border-t py-12 bg-background">
-        <div className="container px-6 mx-auto flex flex-col md:flex-row justify-between items-center gap-6">
-          <p className="text-sm text-gray-500">© 2024 NearSpotty. All rights reserved.</p>
-          <div className="flex gap-6">
-            <Link href="#" className="text-sm text-gray-500 hover:text-foreground">Privacy</Link>
-            <Link href="#" className="text-sm text-gray-500 hover:text-foreground">Terms</Link>
-          </div>
-        </div>
-      </footer>
+      <Footer />
     </div>
   );
 }

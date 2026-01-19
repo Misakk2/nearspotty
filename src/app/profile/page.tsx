@@ -1,9 +1,10 @@
 "use client";
+
 import { auth, db } from "@/lib/firebase";
 import { signOut, updateProfile } from "firebase/auth";
-import { doc, updateDoc } from "firebase/firestore";
-import { useState } from "react";
-import toast, { Toaster } from "react-hot-toast";
+import { doc, getDoc, updateDoc } from "firebase/firestore";
+import { useState, useEffect } from "react";
+import toast from "react-hot-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,12 +13,35 @@ import { useAuth } from "@/components/auth-provider";
 import ProtectedRoute from "@/components/protected-route";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Calendar, CreditCard, LogOut } from "lucide-react";
+import { Calendar, CreditCard, LogOut, LayoutDashboard } from "lucide-react";
+
+const DIETARY_OPTIONS = [
+    { id: "vegan", label: "Vegan" },
+    { id: "vegetarian", label: "Vegetarian" },
+    { id: "gluten-free", label: "Gluten-Free" },
+    { id: "lactose-free", label: "Lactose-Free" },
+];
 
 export default function ProfilePage() {
     const { user } = useAuth();
     const [loading, setLoading] = useState(false);
+    const [userRole, setUserRole] = useState<string | null>(null);
+    const [dietary, setDietary] = useState<string[]>([]);
+    const [allergies, setAllergies] = useState("");
     const router = useRouter();
+
+    useEffect(() => {
+        if (user) {
+            getDoc(doc(db, "users", user.uid)).then(snap => {
+                if (snap.exists()) {
+                    const data = snap.data();
+                    setUserRole(data.role || "diner");
+                    setDietary(data.preferences?.dietary || []);
+                    setAllergies(data.preferences?.allergies || "");
+                }
+            });
+        }
+    }, [user]);
 
     const handleUpdate = async (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
@@ -28,22 +52,32 @@ export default function ProfilePage() {
 
         try {
             await updateProfile(user, { displayName: name });
-            await updateDoc(doc(db, "users", user.uid), { displayName: name });
+            await updateDoc(doc(db, "users", user.uid), {
+                displayName: name,
+                preferences: {
+                    dietary,
+                    allergies,
+                }
+            });
             toast.success("Profile updated!");
-        } catch (error: unknown) {
-            console.error(error);
+        } catch (error) {
+            console.error("Profile update error:", error);
             toast.error("Failed to update profile");
         } finally {
             setLoading(false);
         }
     };
 
+    const toggleDietary = (id: string) => {
+        setDietary(prev => prev.includes(id) ? prev.filter(d => d !== id) : [...prev, id]);
+    };
+
     const handleLogout = async () => {
         try {
             await signOut(auth);
             router.push("/");
-            toast.success("Logged out successfully");
-        } catch {
+        } catch (error) {
+            console.error("Logout error:", error);
             toast.error("Failed to logout");
         }
     };
@@ -51,54 +85,89 @@ export default function ProfilePage() {
     return (
         <ProtectedRoute>
             <div className="container mx-auto py-10 px-4 min-h-screen">
-                <Toaster position="top-center" />
-                <Card className="max-w-md mx-auto">
-                    <CardHeader>
-                        <CardTitle className="text-2xl text-center">Your Profile</CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-8">
-                        <div className="flex flex-col items-center space-y-4">
-                            <div className="h-24 w-24 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center text-3xl font-bold uppercase text-gray-500 overflow-hidden border-4 border-white shadow-lg">
-                                {user?.photoURL ? (
-                                    // eslint-disable-next-line @next/next/no-img-element
-                                    <img src={user.photoURL} alt={user.displayName || "User"} className="h-full w-full object-cover" />
-                                ) : (
-                                    user?.displayName?.charAt(0) || user?.email?.charAt(0) || "U"
-                                )}
-                            </div>
-                            <div className="text-center">
-                                <p className="font-bold text-xl">{user?.displayName || "User"}</p>
-                                <p className="text-sm text-gray-500">{user?.email}</p>
-                            </div>
-                        </div>
+                <div className="max-w-2xl mx-auto space-y-8">
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>Personal Information</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                            <form onSubmit={handleUpdate} className="grid md:grid-cols-2 gap-8">
+                                <div className="space-y-6">
+                                    <div className="flex items-center gap-4">
+                                        <div className="h-20 w-20 rounded-full bg-primary/10 flex items-center justify-center text-2xl font-bold text-primary">
+                                            {user?.displayName?.charAt(0) || user?.email?.charAt(0)}
+                                        </div>
+                                        <div>
+                                            <p className="font-bold text-lg">{user?.displayName}</p>
+                                            <p className="text-sm text-gray-500">{user?.email}</p>
+                                        </div>
+                                    </div>
 
-                        <form onSubmit={handleUpdate} className="space-y-4">
-                            <div className="space-y-2">
-                                <Label htmlFor="name">Display Name</Label>
-                                <Input id="name" name="name" defaultValue={user?.displayName || ""} placeholder="Your Name" />
-                            </div>
-                            <Button type="submit" className="w-full" disabled={loading}>Update Profile</Button>
-                        </form>
+                                    <div className="space-y-4">
+                                        <div className="space-y-2">
+                                            <Label htmlFor="name">Full Name</Label>
+                                            <Input id="name" name="name" defaultValue={user?.displayName || ""} />
+                                        </div>
+                                        <Button type="submit" disabled={loading} className="w-full">
+                                            {loading ? "Saving..." : "Save Changes"}
+                                        </Button>
+                                    </div>
+                                </div>
 
-                        <div className="space-y-3 border-t pt-6">
-                            <h4 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">Account</h4>
-                            <Link href="/reservations" className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-100 transition-colors">
-                                <Calendar className="h-5 w-5 text-primary" />
-                                <span className="flex-1 font-medium">My Reservations</span>
+                                <div className="space-y-6 border-l pl-8 border-gray-100">
+                                    <h3 className="font-bold text-lg">Dietary Preferences</h3>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        {DIETARY_OPTIONS.map(opt => (
+                                            <button
+                                                key={opt.id}
+                                                type="button"
+                                                onClick={() => toggleDietary(opt.id)}
+                                                className={`px-4 py-2 rounded-full text-xs font-bold border-2 transition-all ${dietary.includes(opt.id) ? 'bg-primary border-primary text-white shadow-lg shadow-primary/20' : 'bg-white border-gray-100 text-gray-400 hover:border-gray-200'}`}
+                                            >
+                                                {opt.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label htmlFor="allergies">Allergies</Label>
+                                        <Input
+                                            id="allergies"
+                                            value={allergies}
+                                            onChange={(e) => setAllergies(e.target.value)}
+                                            placeholder="e.g. Nuts, Soy"
+                                        />
+                                    </div>
+                                </div>
+                            </form>
+                        </CardContent>
+                    </Card>
+
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>Shortcuts</CardTitle>
+                        </CardHeader>
+                        <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            {userRole === "owner" && (
+                                <Link href="/dashboard" className="p-6 rounded-3xl border-2 border-green-50 bg-green-50/20 hover:bg-green-50/40 transition-all text-center group">
+                                    <LayoutDashboard className="h-8 w-8 text-green-600 mx-auto mb-3 group-hover:scale-110 transition-transform" />
+                                    <p className="font-bold text-green-700">Business Dashboard</p>
+                                </Link>
+                            )}
+                            <Link href="/reservations" className="p-6 rounded-3xl border-2 border-gray-50 bg-gray-50/20 hover:bg-gray-50/40 transition-all text-center group">
+                                <Calendar className="h-8 w-8 text-primary mx-auto mb-3 group-hover:scale-110 transition-transform" />
+                                <p className="font-bold text-gray-700">My Reservations</p>
                             </Link>
-                            <Link href="/subscription" className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-100 transition-colors">
-                                <CreditCard className="h-5 w-5 text-primary" />
-                                <span className="flex-1 font-medium">Subscription Plan</span>
+                            <Link href="/subscription" className="p-6 rounded-3xl border-2 border-gray-50 bg-gray-50/20 hover:bg-gray-50/40 transition-all text-center group">
+                                <CreditCard className="h-8 w-8 text-primary mx-auto mb-3 group-hover:scale-110 transition-transform" />
+                                <p className="font-bold text-gray-700">Subscription</p>
                             </Link>
-                        </div>
+                        </CardContent>
+                    </Card>
 
-                        <div className="border-t pt-6">
-                            <Button variant="outline" onClick={handleLogout} className="w-full hover:bg-destructive hover:text-white transition-colors">
-                                <LogOut className="h-4 w-4 mr-2" /> Sign Out
-                            </Button>
-                        </div>
-                    </CardContent>
-                </Card>
+                    <Button variant="outline" onClick={handleLogout} className="w-full h-14 rounded-full font-bold border-2 border-gray-100 text-gray-500 hover:bg-destructive hover:text-white transition-all">
+                        <LogOut className="h-5 w-5 mr-3" /> Sign Out from NearSpotty
+                    </Button>
+                </div>
             </div>
         </ProtectedRoute>
     );
