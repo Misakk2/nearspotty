@@ -40,7 +40,7 @@ export default function SubscriptionPage() {
                 body: JSON.stringify({
                     userId: user.uid,
                     userEmail: user.email,
-                    priceId: "price_1SrDsEJCjItbR3I2XqbPKHZk", // Premium Subscription Price ID (9.99 EUR)
+                    priceId: "price_1SuvxKEOZfDm5I749j79vou5", // Premium Subscription Price ID (9.99 EUR)
                 }),
             });
             const data = await response.json();

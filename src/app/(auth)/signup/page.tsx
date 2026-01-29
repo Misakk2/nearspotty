@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createUserWithEmailAndPassword, updateProfile, signInWithPopup, GoogleAuthProvider, User } from "firebase/auth";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
+import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,7 +19,44 @@ function SignupForm() {
     const searchParams = useSearchParams();
     const initialRole = searchParams.get("role") || "user";
     const initialPlan = searchParams.get("plan") || "free";
+    const { user, userRole, loading: authLoading } = useAuth();
     const [loading, setLoading] = useState(false);
+
+    // If user is already logged in and wants a specific plan, redirect accordingly
+    useEffect(() => {
+        if (!authLoading && user) {
+            // If they are an owner and clicking a plan, send to checkout directly or dashboard
+            if (userRole === "owner" && initialPlan !== "free") {
+                const planToPrice: Record<string, string> = {
+                    'basic': 'price_1SqB26JCjItbR3I2jk3D6ULu',
+                    'pro': 'price_1SqB27JCjItbR3I2ZJUroRHY',
+                    'enterprise': 'price_1SqB27JCjItbR3I2rRZSNLWA'
+                };
+                const priceId = planToPrice[initialPlan];
+                if (priceId) {
+                    toast.loading("Redirecting to checkout...");
+                    fetch("/api/checkout", {
+                        method: "POST",
+                        body: JSON.stringify({
+                            userId: user.uid,
+                            userEmail: user.email,
+                            priceId: priceId,
+                            planName: initialPlan
+                        })
+                    }).then(res => res.json()).then(data => {
+                        if (data.url) window.location.href = data.url;
+                        else router.push("/dashboard");
+                    }).catch(() => router.push("/dashboard"));
+                } else {
+                    router.push("/dashboard");
+                }
+            } else if (userRole === "diner") {
+                router.push("/search");
+            } else if (userRole === "owner") {
+                router.push("/dashboard");
+            }
+        }
+    }, [user, userRole, authLoading, initialPlan, router]);
 
     const saveUser = async (user: User) => {
         // Save basic info to Firestore

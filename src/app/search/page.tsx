@@ -3,6 +3,7 @@ import Map from "@/components/search/map";
 import ProtectedRoute from "@/components/protected-route";
 import RoleGuard from "@/components/RoleGuard";
 import PlaceCard from "@/components/search/place-card";
+import { PlaceCardSkeleton } from "@/components/search/PlaceCardSkeleton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Place } from "@/types/place";
@@ -199,8 +200,12 @@ export default function SearchPage() {
                                 </div>
                             )}
 
-                            {loading && places.length === 0 && (
-                                <div className="flex justify-center p-8"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>
+                            {loading && (
+                                <div className="space-y-4">
+                                    {[1, 2, 3, 4].map((i) => (
+                                        <PlaceCardSkeleton key={i} />
+                                    ))}
+                                </div>
                             )}
 
                             <div className="space-y-4 pb-20 md:pb-0">

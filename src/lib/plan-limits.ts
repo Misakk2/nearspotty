@@ -8,12 +8,12 @@ export type UserPlan = DinerPlan | BusinessPlan;
 // Stripe Price IDs
 export const STRIPE_PRICES = {
     // Diner plans
-    diner_premium: 'price_1SrDsEJCjItbR3I2XqbPKHZk', // €9.99/month
+    diner_premium: 'price_1SuvxKEOZfDm5I749j79vou5', // €9.99/month
 
     // Business plans
-    business_basic: 'price_1SqB26JCjItbR3I2jk3D6ULu',      // €29/month
-    business_pro: 'price_1SqB27JCjItbR3I2ZJUroRHY',        // €79/month
-    business_enterprise: 'price_1SqB27JCjItbR3I2rRZSNLWA', // €199/month
+    business_basic: 'price_1SuvxLEOZfDm5I74RvCbvgkg',      // €29/month
+    business_pro: 'price_1SuvxLEOZfDm5I74QLxVBQKw',        // €79/month
+    business_enterprise: 'price_1SuvxMEOZfDm5I74I28E8OtJ', // €199/month
 } as const;
 
 // Plan names to price ID mapping

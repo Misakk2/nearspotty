@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "";
 if (!apiKey) {
@@ -9,6 +10,14 @@ const genAI = new GoogleGenerativeAI(apiKey);
 
 export async function POST(req: Request) {
     try {
+        // Simple rate limiting
+        const ip = req.headers.get("x-forwarded-for") || "unknown";
+        const rateLimit = await checkRateLimit(`pricing_recommend_${ip}`, { limit: 5, windowMs: 60 * 1000 });
+
+        if (rateLimit.limitReached) {
+            return NextResponse.json({ error: "Too many requests" }, { status: 429 });
+        }
+
         const { location, cuisineType, avgCheckSize } = await req.json();
 
         // Mock market data (In production, this would come from Firestore/Analytics)

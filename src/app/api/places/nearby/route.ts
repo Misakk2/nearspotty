@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getCache, setCache, createCacheKey } from "@/lib/cache-utils";
 
 export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
@@ -10,6 +11,14 @@ export async function GET(request: NextRequest) {
 
     if (!process.env.NEXT_PUBLIC_GOOGLE_PLACES_KEY) {
         return NextResponse.json({ error: "Missing API Key" }, { status: 500 });
+    }
+
+    // Create a cache key based on params
+    const cacheKey = createCacheKey({ lat, lng, radius, type, keyword });
+    const cachedData = await getCache("places_nearby_cache", cacheKey);
+
+    if (cachedData) {
+        return NextResponse.json(cachedData);
     }
 
     // If we have a keyword, we might want Text Search, otherwise Nearby Search
@@ -37,6 +46,14 @@ export async function GET(request: NextRequest) {
     try {
         const res = await fetch(url.toString());
         const data = await res.json();
+
+        // Cache successful response for 24 hours
+        if (data.status === "OK") {
+            await setCache("places_nearby_cache", cacheKey, data);
+        } else {
+            console.error(`Google Places API Error: ${data.status}`, data.error_message);
+        }
+
         return NextResponse.json(data);
     } catch (error) {
         console.error(error);

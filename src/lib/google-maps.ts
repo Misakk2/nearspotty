@@ -1,62 +1,66 @@
+/**
+ * Google Maps API Loader for Next.js
+ *
+ * Uses @googlemaps/js-api-loader v2.x with setOptions() and importLibrary() API.
+ */
 
-// We use dynamic imports to handle the different versions of the loader package
-// and to avoid the "Loader class is no longer available" error.
+import { setOptions, importLibrary } from "@googlemaps/js-api-loader";
 
-let loaderPromise: Promise<void> | null = null;
+let isConfigured = false;
 
+/**
+ * Initialize the Google Maps JavaScript API configuration.
+ * This must be called once before using any google.maps APIs.
+ */
 export const loadGoogleMaps = async (): Promise<void> => {
-    if (loaderPromise) return loaderPromise;
+    if (isConfigured) return;
 
-    loaderPromise = (async () => {
-        // Use dynamic import to access the package
-        const loaderModule = await import("@googlemaps/js-api-loader");
+    const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY;
 
-        // Check for functional API (v2+)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        if (typeof (loaderModule as any).setOptions === 'function') {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (loaderModule as any).setOptions({
-                apiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY as string,
-                version: "weekly",
-                libraries: ["places", "geometry"],
-            });
-        } else if (loaderModule.Loader) {
-            // Fallback to class (v1)
-            const loader = new loaderModule.Loader({
-                apiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY as string,
-                version: "weekly",
-                libraries: ["places", "geometry"],
-            });
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            await (loader as any).load();
-        }
-    })();
+    if (!apiKey) {
+        console.error("[Google Maps] API key is missing! Check NEXT_PUBLIC_GOOGLE_MAPS_KEY in .env.local");
+        throw new Error("Google Maps API key not configured");
+    }
 
-    return loaderPromise;
+    console.log("[Google Maps] Configuring with key:", apiKey.substring(0, 10) + "...");
+
+    try {
+        // v2 API uses setOptions() - must be called BEFORE any importLibrary() call
+        setOptions({
+            key: apiKey,
+            v: "weekly",
+            libraries: ["places", "geometry", "marker"],
+        });
+        isConfigured = true;
+        console.log("[Google Maps] Configuration complete");
+    } catch (error) {
+        console.error("[Google Maps] Configuration failed:", error);
+        throw error;
+    }
 };
 
-// Also export a helper to get libraries
-export const getMapLibrary = async (name: string) => {
+/**
+ * Get a specific Google Maps library.
+ * Ensures the API is configured first, then imports the library.
+ *
+ * @param name - Library name: 'maps', 'places', 'geometry', 'marker', etc.
+ * @returns The requested library module
+ */
+export const getMapLibrary = async <T = google.maps.MapsLibrary>(name: string): Promise<T> => {
     await loadGoogleMaps();
-    const loaderModule = await import("@googlemaps/js-api-loader");
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    if (typeof (loaderModule as any).importLibrary === 'function') {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return (loaderModule as any).importLibrary(name);
-    }
-
-    // If v1, importLibrary might not be exported directly, but available on google.maps
-    // which should be loaded by now.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (window as any).google.maps.importLibrary(name);
+    // v2 API uses importLibrary() from the package directly
+    return importLibrary(name) as Promise<T>;
 };
 
-// Use a singleton object to mimic the old loader API for less refactoring in components
+/**
+ * Shim object to maintain backward compatibility with existing components.
+ * Components can import this default export and use importLibrary().
+ */
 const loaderShim = {
-    importLibrary: async (name: string) => {
-        return getMapLibrary(name);
-    }
+    importLibrary: async <T = google.maps.MapsLibrary>(name: string): Promise<T> => {
+        return getMapLibrary<T>(name);
+    },
 };
 
 export default loaderShim;

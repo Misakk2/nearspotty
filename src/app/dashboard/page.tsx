@@ -1,23 +1,32 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { db } from "@/lib/firebase";
-import { collection, query, getDocs, getDoc, orderBy, Timestamp, doc, updateDoc } from "firebase/firestore";
+import { useState, useEffect } from "react";
+import Link from "next/link";
 import { useAuth } from "@/components/auth-provider";
-import ProtectedRoute from "@/components/protected-route";
 import RoleGuard from "@/components/RoleGuard";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Calendar, Users, Clock, AlertCircle, Loader2, Sparkles, CreditCard, ExternalLink } from "lucide-react";
-import toast from "react-hot-toast";
-import PricingSettings from "@/components/dashboard/PricingSettings";
-
-import { motion } from "framer-motion";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import ProtectedRoute from "@/components/protected-route";
 import { Button } from "@/components/ui/button";
-import { BUSINESS_LIMITS, BusinessPlan } from "@/lib/plan-limits";
-
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import {
+    Users,
+    Calendar,
+    CreditCard,
+    ExternalLink,
+    Clock,
+    AlertCircle,
+    Loader2,
+    Sparkles,
+    ArrowRight
+} from "lucide-react";
+import { doc, getDoc, updateDoc, collection, query, getDocs, orderBy, Timestamp } from "firebase/firestore";
+import { db } from "@/lib/firebase";
+import { motion } from "framer-motion";
+import toast from "react-hot-toast";
+import { BusinessPlan, BUSINESS_LIMITS, PLAN_TO_PRICE } from "@/lib/plan-limits";
+import PricingSettings from "@/components/dashboard/PricingSettings";
 
 interface Reservation {
     id: string;
@@ -48,6 +57,39 @@ export default function BusinessDashboard() {
         cuisine: "International",
         location: "Prague, CZ"
     });
+
+    const handlePlanUpgrade = async (plan: string) => {
+        if (!user) return;
+        const priceId = PLAN_TO_PRICE[plan];
+        if (!priceId) {
+            toast.error("Invalid plan selected");
+            return;
+        }
+
+        toast.loading("Redirecting to checkout...");
+        try {
+            const res = await fetch("/api/checkout", {
+                method: "POST",
+                body: JSON.stringify({
+                    userId: user.uid,
+                    userEmail: user.email,
+                    priceId: priceId,
+                    planName: plan
+                })
+            });
+            const data = await res.json();
+            if (data.url) {
+                window.location.href = data.url;
+            } else {
+                toast.dismiss();
+                toast.error("Failed to start checkout");
+            }
+        } catch (error) {
+            console.error("Upgrade error:", error);
+            toast.dismiss();
+            toast.error("Connection error. Please try again.");
+        }
+    };
     const [userPlan, setUserPlan] = useState<BusinessPlan>("free");
     const [stripeCustomerId, setStripeCustomerId] = useState<string | null>(null);
 
@@ -288,41 +330,63 @@ export default function BusinessDashboard() {
                                             <CardHeader>
                                                 <CardTitle className="flex items-center gap-2">
                                                     <Sparkles className="h-5 w-5 text-primary" />
-                                                    Upgrade Available
+                                                    Upgrade Your Plan
                                                 </CardTitle>
-                                                <CardDescription>Get more features with a higher plan</CardDescription>
+                                                <CardDescription>Select a plan to unlock more features</CardDescription>
                                             </CardHeader>
                                             <CardContent>
                                                 <div className="space-y-4">
                                                     {userPlan === "free" && (
-                                                        <div className="p-4 bg-white rounded-xl border">
-                                                            <p className="font-bold">Basic Plan - €29/mo</p>
-                                                            <p className="text-sm text-gray-500">50 reservations, restaurant profile</p>
-                                                        </div>
+                                                        <button
+                                                            onClick={() => handlePlanUpgrade('basic')}
+                                                            className="w-full p-4 bg-white rounded-xl border text-left hover:border-primary transition-all group"
+                                                        >
+                                                            <div className="flex justify-between items-center">
+                                                                <div>
+                                                                    <p className="font-bold">Basic Plan - €29/mo</p>
+                                                                    <p className="text-sm text-gray-500">50 reservations, restaurant profile</p>
+                                                                </div>
+                                                                <ArrowRight className="h-4 w-4 text-gray-300 group-hover:text-primary transition-colors" />
+                                                            </div>
+                                                        </button>
                                                     )}
                                                     {(userPlan === "free" || userPlan === "basic") && (
-                                                        <div className="p-4 bg-white rounded-xl border border-primary/30">
-                                                            <div className="flex items-center gap-2 mb-1">
-                                                                <p className="font-bold">Pro Plan - €79/mo</p>
-                                                                <Badge className="bg-primary text-white text-xs">Popular</Badge>
+                                                        <button
+                                                            onClick={() => handlePlanUpgrade('pro')}
+                                                            className="w-full p-4 bg-white rounded-xl border border-primary/30 text-left hover:border-primary transition-all group relative overflow-hidden"
+                                                        >
+                                                            <div className="absolute top-0 right-0 bg-primary text-white text-[10px] px-2 py-0.5 font-bold rounded-bl-lg">
+                                                                POPULAR
                                                             </div>
-                                                            <p className="text-sm text-gray-500">Unlimited reservations, AI insights</p>
-                                                        </div>
+                                                            <div className="flex justify-between items-center">
+                                                                <div>
+                                                                    <p className="font-bold">Pro Plan - €79/mo</p>
+                                                                    <p className="text-sm text-gray-500">Unlimited reservations, AI insights</p>
+                                                                </div>
+                                                                <ArrowRight className="h-4 w-4 text-gray-300 group-hover:text-primary transition-colors" />
+                                                            </div>
+                                                        </button>
                                                     )}
-                                                    <div className="p-4 bg-white rounded-xl border">
-                                                        <p className="font-bold">Enterprise Plan - €199/mo</p>
-                                                        <p className="text-sm text-gray-500">Multi-location, API access, dedicated support</p>
-                                                    </div>
+                                                    <button
+                                                        onClick={() => handlePlanUpgrade('enterprise')}
+                                                        className="w-full p-4 bg-white rounded-xl border text-left hover:border-primary transition-all group"
+                                                    >
+                                                        <div className="flex justify-between items-center">
+                                                            <div>
+                                                                <p className="font-bold">Enterprise Plan - €199/mo</p>
+                                                                <p className="text-sm text-gray-500">Multi-location & dedicated support</p>
+                                                            </div>
+                                                            <ArrowRight className="h-4 w-4 text-gray-300 group-hover:text-primary transition-colors" />
+                                                        </div>
+                                                    </button>
                                                 </div>
                                             </CardContent>
                                             <CardFooter>
-                                                <Button
-                                                    className="w-full"
-                                                    variant="outline"
-                                                    onClick={() => window.location.href = "/for-restaurants#pricing"}
-                                                >
-                                                    View All Plans
-                                                </Button>
+                                                <Link href="/for-restaurants#pricing" className="w-full">
+                                                    <Button variant="ghost" className="w-full">
+                                                        Compare All Features
+                                                    </Button>
+                                                </Link>
                                             </CardFooter>
                                         </Card>
                                     )}

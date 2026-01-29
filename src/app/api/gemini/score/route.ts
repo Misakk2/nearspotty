@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { adminDb } from "@/lib/firebase-admin";
+import { checkRateLimit } from "@/lib/rate-limit";
 import crypto from "crypto";
 
 const genAI = new GoogleGenerativeAI(process.env.NEXT_PUBLIC_GEMINI_API_KEY || "");
@@ -11,6 +12,14 @@ const CACHE_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
 
 export async function POST(request: NextRequest) {
     try {
+        // Simple rate limiting based on IP
+        const ip = request.ip || request.headers.get("x-forwarded-for") || "unknown";
+        const rateLimit = await checkRateLimit(`gemini_score_${ip}`, { limit: 10, windowMs: 60 * 1000 }); // 10 per minute
+
+        if (rateLimit.limitReached) {
+            return NextResponse.json({ error: "Too many requests. Please try again in a minute." }, { status: 429 });
+        }
+
         const { placeId, name, dietary, reviews } = await request.json();
 
         if (!placeId || !name || !dietary) {

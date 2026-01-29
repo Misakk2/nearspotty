@@ -1,9 +1,3 @@
-"use client";
-
-import { useEffect } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useAuth } from "@/components/auth-provider";
 import { Hero } from "@/components/landing/Hero";
 import { HowItWorks, Features } from "@/components/landing/Sections";
 import { ProblemSolution } from "@/components/landing/ProblemSolution";
@@ -11,51 +5,15 @@ import { DietaryNeeds } from "@/components/landing/DietaryNeeds";
 import { Testimonials } from "@/components/landing/Marketing";
 import { CTASection } from "@/components/landing/FinalSections";
 import { Footer } from "@/components/landing/Footer";
-import { Loader2 } from "lucide-react";
+import { getTranslation } from "@/lib/i18n-server";
 
 export default function Home() {
-  const { user, userRole, loading } = useAuth();
-  const router = useRouter();
+  const { t } = getTranslation();
 
-  // Redirect logged-in users to their appropriate page
-  useEffect(() => {
-    if (!loading && user) {
-      if (userRole === "owner") {
-        router.push("/dashboard");
-      } else if (userRole === "diner") {
-        router.push("/search");
-      } else if (userRole === "no_role") {
-        // New user or interrupted onboarding
-        router.push("/onboarding");
-      }
-    }
-  }, [user, userRole, loading, router]);
-
-  // Show loading while checking auth or redirecting
-  if (loading || (user && userRole !== "error")) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-4">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        {user && (
-          <div className="text-center animate-in fade-in duration-700">
-            <p className="text-sm text-muted-foreground font-medium">Redirecting you to your workspace...</p>
-            <Link
-              href={userRole === "owner" ? "/dashboard" : (userRole === "diner" ? "/search" : "/onboarding")}
-              className="mt-4 text-xs text-primary underline block"
-            >
-              Click here if you are not redirected automatically
-            </Link>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  const steps = [
-    { title: "Tell Us Your Diet", subtitle: "Vegan, gluten-free, lactose-intolerant? Set your preferences once.", icon: "checklist" as const },
-    { title: "AI Finds Perfect Matches", subtitle: "Gemini 3 analyzes thousands of reviews to score restaurants for YOU.", icon: "sparkle" as const },
-    { title: "Reserve in One Tap", subtitle: "See only open places. Book instantly. Stress-free dining.", icon: "calendar" as const },
-  ];
+  const steps = (t("landing.steps") as { title: string; subtitle: string }[]).map((step, i) => ({
+    ...step,
+    icon: ["checklist", "sparkle", "calendar"][i] as "checklist" | "sparkle" | "calendar"
+  }));
 
   const painPoints = [
     { icon: "closed", text: "Scrolling through 50 closed restaurants at 10 PM" },
@@ -82,13 +40,13 @@ export default function Home() {
     <div className="flex min-h-screen flex-col">
       <main className="flex-1">
         <Hero
-          title={<>Find Your Perfect Meal, <br /><span className="bg-clip-text text-transparent bg-gradient-to-r from-primary to-orange-400">Matched to Your Diet</span></>}
-          subtitle="AI-powered restaurant discovery for vegans, vegetarians, gluten-free, lactose-free, and every dietary need. Instant results. Open now. Safe for you."
-          primaryCTA="Find Restaurants Near Me"
+          title={<>{t("landing.hero_title") as string} <br /><span className="bg-clip-text text-transparent bg-gradient-to-r from-primary to-orange-400">{t("landing.hero_title_accent") as string}</span></>}
+          subtitle={t("landing.hero_subtitle") as string}
+          primaryCTA={t("landing.hero_cta_primary") as string}
           primaryLink="/signup?redirect=/search"
-          secondaryCTA="For Restaurant Owners"
+          secondaryCTA={t("landing.hero_cta_secondary") as string}
           secondaryLink="/for-restaurants"
-          trustBadge="Powered by Gemini 3 AI • 1000+ Restaurants"
+          trustBadge={t("landing.hero_trust") as string}
         />
 
         <HowItWorks steps={steps} />

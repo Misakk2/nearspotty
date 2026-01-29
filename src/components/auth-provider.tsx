@@ -5,7 +5,7 @@ import { User, onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 
 import { db } from "@/lib/firebase";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, onSnapshot } from "firebase/firestore";
 
 interface AuthContextType {
     user: User | null;
@@ -23,29 +23,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        const unsubscribe = onAuthStateChanged(auth, async (user) => {
+        const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
             try {
-                setUser(user);
-                if (user) {
-                    const userDoc = await getDoc(doc(db, "users", user.uid));
-                    if (userDoc.exists()) {
-                        setUserRole(userDoc.data().role || "diner");
-                    } else {
-                        // User exists in Auth but not in Firestore yet
-                        setUserRole("no_role");
-                    }
+                setUser(firebaseUser);
+                if (firebaseUser) {
+                    // Subscribe to real-time updates for the user document
+                    const unsubscribeFirestore = onSnapshot(doc(db, "users", firebaseUser.uid), (docSnapshot) => {
+                        if (docSnapshot.exists()) {
+                            setUserRole(docSnapshot.data().role || "diner");
+                        } else {
+                            setUserRole("no_role");
+                        }
+                        setLoading(false);
+                    }, (error) => {
+                        console.error("Firestore Listener Error:", error);
+                        setUserRole("error");
+                        setLoading(false);
+                    });
+
+                    // Cleanup Firestore listener when auth state changes or component unmounts
+                    return () => unsubscribeFirestore();
                 } else {
                     setUserRole(null);
+                    setLoading(false);
                 }
             } catch (error) {
                 console.error("Auth Provider Error:", error);
                 setUserRole("error");
-            } finally {
                 setLoading(false);
             }
         });
 
-        return () => unsubscribe();
+        return () => unsubscribeAuth();
     }, []);
 
     return (

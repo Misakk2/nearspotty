@@ -1,0 +1,33 @@
+{
+    "common": {
+        "loading": "Načítavanie...",
+        "error": "Chyba",
+        "search": "Hľadať",
+        "for_restaurants": "Pre reštaurácie",
+        "signup": "Zaregistrovať sa",
+        "login": "Prihlásiť sa"
+    },
+    "landing": {
+        "hero_title": "Nájdite si dokonalé jedlo,",
+        "hero_title_accent": "prispôsobené vašej diéte",
+        "hero_subtitle": "Reštaurácie poháňané AI pre vegánov, vegetariánov, bezlepkovú a bezlaktózovú diétu. Okamžité výsledky. Otvorené teraz. Bezpečné pre vás.",
+        "hero_cta_primary": "Nájsť reštaurácie v okolí",
+        "hero_cta_secondary": "Pre majiteľov reštaurácií",
+        "hero_trust": "Poháňané Gemini 3 AI • 1000+ Reštaurácií",
+        "how_it_works_title": "Ako to funguje",
+        "steps": [
+            {
+                "title": "Povedzte nám o svojej diéte",
+                "subtitle": "Vegán, bezlepkový, bezlaktózový? Nastavte si preferencie raz."
+            },
+            {
+                "title": "AI nájde dokonalú zhodu",
+                "subtitle": "Gemini 3 analyzuje tisíce recenzií a ohodnotí reštaurácie pre VÁS."
+            },
+            {
+                "title": "Rezervujte jedným ťuknutím",
+                "subtitle": "Uvidíte len otvorené miesta. Rezervujte okamžite. Stolovanie bez stresu."
+            }
+        ]
+    }
+}

@@ -334,8 +334,8 @@ function OnboardingForm() {
                                                             );
                                                         }}
                                                         className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${isSelected
-                                                                ? 'bg-primary text-white border-primary'
-                                                                : 'bg-white border-gray-200 hover:border-primary/50'
+                                                            ? 'bg-primary text-white border-primary'
+                                                            : 'bg-white border-gray-200 hover:border-primary/50'
                                                             }`}
                                                     >
                                                         {cuisine}
@@ -421,7 +421,7 @@ function OnboardingForm() {
                                         <span className="text-gray-500">Address:</span>
                                         <span className="font-medium">{formData.restaurantAddress || "Not set"}</span>
                                         <span className="text-gray-500">Plan:</span>
-                                        <span className="font-medium text-primary">Business Free</span>
+                                        <span className="font-medium text-primary capitalize">{userPlan || "free"}</span>
                                     </div>
                                 </div>
                             ) : (

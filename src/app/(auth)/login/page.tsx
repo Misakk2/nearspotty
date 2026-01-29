@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { signInWithEmailAndPassword, signInWithPopup, GoogleAuthProvider } from "firebase/auth";
 import { auth } from "@/lib/firebase";
+import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,7 +14,16 @@ import toast, { Toaster } from "react-hot-toast";
 
 export default function LoginPage() {
     const router = useRouter();
+    const { user, userRole, loading: authLoading } = useAuth();
     const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        if (!authLoading && user) {
+            if (userRole === "owner") router.push("/dashboard");
+            else if (userRole === "diner") router.push("/search");
+            else router.push("/onboarding");
+        }
+    }, [user, userRole, authLoading, router]);
 
     const handleEmailLogin = async (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();

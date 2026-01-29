@@ -1,8 +1,50 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if true;
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return request.auth.uid == userId;
+    }
+
+    // User profiles and all their subcollections (preferences, settings, etc)
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+      
+      match /{allPaths=**} {
+        allow read, write: if isOwner(userId);
+      }
+    }
+
+    // Restaurants/Websites
+    match /websites/{websiteId} {
+      allow read: if true; // Publicly viewable
+      allow write: if isAuthenticated() && (
+        (resource == null && request.resource.data.ownerId == request.auth.uid) || 
+        (resource != null && resource.data.ownerId == request.auth.uid)
+      );
+    }
+
+    // Reservations
+    match /reservations/{resId} {
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid || 
+        get(/databases/$(database)/documents/websites/$(resource.data.websiteId)).data.ownerId == request.auth.uid
+      );
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // Caches - Server only usually, but let's allow authenticated read for debugging/performance if needed
+    // Best practice: server-only paths shouldn't be accessible by clients at all.
+    match /places_nearby_cache/{any} {
+      allow read, write: if false; // Server-only (Admin SDK bypasses this)
+    }
+    match /place_details_cache/{any} {
+      allow read, write: if false; // Server-only
     }
   }
 }

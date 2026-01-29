@@ -1,0 +1,33 @@
+{
+    "common": {
+        "loading": "Loading...",
+        "error": "Error",
+        "search": "Search",
+        "for_restaurants": "For Restaurants",
+        "signup": "Sign Up",
+        "login": "Log In"
+    },
+    "landing": {
+        "hero_title": "Find Your Perfect Meal,",
+        "hero_title_accent": "Matched to Your Diet",
+        "hero_subtitle": "AI-powered restaurant discovery for vegans, vegetarians, gluten-free, lactose-free, and every dietary need. Instant results. Open now. Safe for you.",
+        "hero_cta_primary": "Find Restaurants Near Me",
+        "hero_cta_secondary": "For Restaurant Owners",
+        "hero_trust": "Powered by Gemini 3 AI • 1000+ Restaurants",
+        "how_it_works_title": "How it Works",
+        "steps": [
+            {
+                "title": "Tell Us Your Diet",
+                "subtitle": "Vegan, gluten-free, lactose-intolerant? Set your preferences once."
+            },
+            {
+                "title": "AI Finds Perfect Matches",
+                "subtitle": "Gemini 3 analyzes thousands of reviews to score restaurants for YOU."
+            },
+            {
+                "title": "Reserve in One Tap",
+                "subtitle": "See only open places. Book instantly. Stress-free dining."
+            }
+        ]
+    }
+}

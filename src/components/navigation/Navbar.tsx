@@ -8,10 +8,12 @@ import { Utensils, LayoutDashboard, User, Search, LogOut, ChevronRight } from "l
 import { auth } from "@/lib/firebase";
 import { signOut } from "firebase/auth";
 import toast from "react-hot-toast";
+import { useI18n } from "@/components/i18n-provider";
 
 export default function Navbar() {
     const pathname = usePathname();
     const { user, userRole } = useAuth();
+    const { locale, setLocale } = useI18n();
 
     const isBusinessPage = pathname.startsWith("/for-restaurants") || pathname.startsWith("/dashboard");
 
@@ -87,61 +89,73 @@ export default function Navbar() {
 
                 <div className="h-8 w-px bg-gray-200 hidden md:block" />
 
-                {user ? (
-                    <div className="flex items-center gap-2">
-                        {userRole === 'owner' ? (
-                            <>
-                                <Link href="/dashboard">
-                                    <Button variant={pathname.startsWith("/dashboard") ? "default" : "ghost"} className="font-bold flex items-center gap-2">
-                                        <LayoutDashboard className="h-4 w-4" />
-                                        Dashboard
+                <div className="flex items-center gap-2">
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setLocale(locale === "en" ? "sk" : "en")}
+                        className="font-bold text-[10px] w-8 h-8 p-0 rounded-full border border-gray-100 hover:bg-gray-50 transition-colors"
+                        title={locale === "en" ? "Prepnúť do Slovenčiny" : "Switch to English"}
+                    >
+                        {locale === "en" ? "SK" : "EN"}
+                    </Button>
+
+                    {user ? (
+                        <div className="flex items-center gap-2">
+                            {userRole === 'owner' ? (
+                                <>
+                                    <Link href="/dashboard">
+                                        <Button variant={pathname.startsWith("/dashboard") ? "default" : "ghost"} className="font-bold flex items-center gap-2">
+                                            <LayoutDashboard className="h-4 w-4" />
+                                            Dashboard
+                                        </Button>
+                                    </Link>
+                                    <Link href="/profile">
+                                        <Button variant={pathname === "/profile" ? "default" : "ghost"} size="icon" className="rounded-full">
+                                            <User className="h-4 w-4" />
+                                        </Button>
+                                    </Link>
+                                </>
+                            ) : userRole === 'diner' ? (
+                                <>
+                                    <Link href="/profile">
+                                        <Button variant={pathname === "/profile" ? "default" : "ghost"} className="font-bold flex items-center gap-2">
+                                            <User className="h-4 w-4" />
+                                            Profile
+                                        </Button>
+                                    </Link>
+                                    <Link href="/reservations">
+                                        <Button variant={pathname === "/reservations" ? "default" : "ghost"} size="icon" className="rounded-full">
+                                            <Utensils className="h-4 w-4" />
+                                        </Button>
+                                    </Link>
+                                </>
+                            ) : (
+                                // 'no_role' or 'loading'
+                                <Link href="/onboarding">
+                                    <Button variant="outline" className="border-primary text-primary font-bold hover:bg-primary/5">
+                                        Complete Setup
                                     </Button>
                                 </Link>
-                                <Link href="/profile">
-                                    <Button variant={pathname === "/profile" ? "default" : "ghost"} size="icon" className="rounded-full">
-                                        <User className="h-4 w-4" />
-                                    </Button>
-                                </Link>
-                            </>
-                        ) : userRole === 'diner' ? (
-                            <>
-                                <Link href="/profile">
-                                    <Button variant={pathname === "/profile" ? "default" : "ghost"} className="font-bold flex items-center gap-2">
-                                        <User className="h-4 w-4" />
-                                        Profile
-                                    </Button>
-                                </Link>
-                                <Link href="/reservations">
-                                    <Button variant={pathname === "/reservations" ? "default" : "ghost"} size="icon" className="rounded-full">
-                                        <Utensils className="h-4 w-4" />
-                                    </Button>
-                                </Link>
-                            </>
-                        ) : (
-                            // 'no_role' or 'loading'
-                            <Link href="/onboarding">
-                                <Button variant="outline" className="border-primary text-primary font-bold hover:bg-primary/5">
-                                    Complete Setup
+                            )}
+                            <Button variant="outline" size="icon" onClick={handleLogout} className="rounded-full bg-red-50 hover:bg-red-100 border-red-100 text-red-600 transition-colors">
+                                <LogOut className="h-4 w-4" />
+                            </Button>
+                        </div>
+                    ) : (
+                        <div className="flex items-center gap-2">
+                            <Link href={`/login${isBusinessPage ? '?role=owner' : ''}`}>
+                                <Button variant="ghost" className="font-bold text-gray-700">Log in</Button>
+                            </Link>
+                            <Link href={`/signup${isBusinessPage ? '?role=owner' : ''}`}>
+                                <Button className="font-bold shadow-xl shadow-primary/20 rounded-full px-6 flex items-center gap-2">
+                                    {isBusinessPage ? 'Join as Owner' : 'Join Now'}
+                                    <ChevronRight className="h-4 w-4" />
                                 </Button>
                             </Link>
-                        )}
-                        <Button variant="outline" size="icon" onClick={handleLogout} className="rounded-full bg-red-50 hover:bg-red-100 border-red-100 text-red-600 transition-colors">
-                            <LogOut className="h-4 w-4" />
-                        </Button>
-                    </div>
-                ) : (
-                    <div className="flex items-center gap-2">
-                        <Link href={`/login${isBusinessPage ? '?role=owner' : ''}`}>
-                            <Button variant="ghost" className="font-bold text-gray-700">Log in</Button>
-                        </Link>
-                        <Link href={`/signup${isBusinessPage ? '?role=owner' : ''}`}>
-                            <Button className="font-bold shadow-xl shadow-primary/20 rounded-full px-6 flex items-center gap-2">
-                                {isBusinessPage ? 'Join as Owner' : 'Join Now'}
-                                <ChevronRight className="h-4 w-4" />
-                            </Button>
-                        </Link>
-                    </div>
-                )}
+                        </div>
+                    )}
+                </div>
             </nav>
         </header>
     );
