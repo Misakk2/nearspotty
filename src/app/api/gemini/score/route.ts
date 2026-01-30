@@ -70,17 +70,26 @@ export async function POST(request: NextRequest) {
         }
 
         const prompt = `
-      Analyze these restaurant reviews for dietary suitability.
+      Analyze this restaurant for a user and determine how well it matches their preferences.
+      
       Restaurant: ${name}
-      User requirements: ${JSON.stringify(dietary)}
+      User Profile: ${JSON.stringify(dietary)}
       Reviews: ${reviewText}
       
-      Output JSON only:
+      Consider:
+      - Dietary restrictions and allergies
+      - Budget preference (low=€, medium=€€, high=€€€)
+      - Favorite cuisines
+      - Menu mentions in reviews
+      
+      Output JSON only (no markdown):
       {
-        "dietaryScore": 0-5 (float),
-        "fitReason": "brief explanation",
-        "recommendedDishes": ["dish1", "dish2"],
-        "warnings": ["may contain dairy"] or []
+        "matchScore": 0-100 (integer percentage of how well this place fits the user),
+        "shortReason": "1-2 sentence explanation of the match",
+        "pros": ["user-specific advantage 1", "advantage 2"],
+        "cons": ["user-specific disadvantage 1"] or [],
+        "recommendedDish": "single best dish for this user based on reviews",
+        "warnings": ["allergy/dietary warning"] or []
       }
     `;
 
@@ -91,6 +100,11 @@ export async function POST(request: NextRequest) {
         // Clean up markdown code blocks if present
         const jsonStr = text.replace(/```json\n?|\n?```/g, "").trim();
         const json = JSON.parse(jsonStr);
+
+        // Ensure matchScore is in valid range
+        if (typeof json.matchScore === 'number') {
+            json.matchScore = Math.max(0, Math.min(100, Math.round(json.matchScore)));
+        }
 
         // Save to Firestore
         await cacheRef.set({

@@ -27,6 +27,7 @@ export default function ProfilePage() {
     const [loading, setLoading] = useState(false);
     const [dietary, setDietary] = useState<string[]>([]);
     const [allergies, setAllergies] = useState("");
+    const [budget, setBudget] = useState<'low' | 'medium' | 'high' | 'any'>('any');
     const router = useRouter();
 
     useEffect(() => {
@@ -36,6 +37,7 @@ export default function ProfilePage() {
                     const data = snap.data();
                     setDietary(data.preferences?.dietary || []);
                     setAllergies(data.preferences?.allergies || "");
+                    setBudget(data.preferences?.budget || 'any');
                 }
             });
         }
@@ -55,6 +57,7 @@ export default function ProfilePage() {
                 preferences: {
                     dietary,
                     allergies,
+                    budget,
                 }
             });
             toast.success("Profile updated!");
@@ -134,6 +137,31 @@ export default function ProfilePage() {
                                             onChange={(e) => setAllergies(e.target.value)}
                                             placeholder="e.g. Nuts, Soy"
                                         />
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        <Label>Budget Preference</Label>
+                                        <div className="flex flex-wrap gap-2">
+                                            {(['any', 'low', 'medium', 'high'] as const).map((budgetOption) => {
+                                                const isSelected = budget === budgetOption;
+                                                const labels = {
+                                                    any: '💰 Any',
+                                                    low: '€ Budget',
+                                                    medium: '€€ Mid-range',
+                                                    high: '€€€ Fine dining'
+                                                };
+                                                return (
+                                                    <button
+                                                        key={budgetOption}
+                                                        type="button"
+                                                        onClick={() => setBudget(budgetOption)}
+                                                        className={`px-3 py-1.5 rounded-full text-xs font-bold border-2 transition-all ${isSelected ? 'bg-primary border-primary text-white shadow-lg shadow-primary/20' : 'bg-white border-gray-100 text-gray-400 hover:border-gray-200'}`}
+                                                    >
+                                                        {labels[budgetOption]}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
                                     </div>
                                 </div>
                             </form>

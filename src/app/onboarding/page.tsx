@@ -55,6 +55,7 @@ function OnboardingForm() {
         allergies: "",
         cuisines: [] as string[],
         radius: 5,
+        budget: "any" as 'low' | 'medium' | 'high' | 'any',
         restaurantName: "",
         restaurantAddress: "",
         cuisineTypes: [] as string[], // Multiple cuisine selection for business
@@ -104,6 +105,7 @@ function OnboardingForm() {
                     allergies: formData.allergies,
                     cuisines: formData.cuisines,
                     radius: formData.radius,
+                    budget: formData.budget,
                     completedOnboarding: true
                 },
                 business: formData.role === "owner" ? {
@@ -455,6 +457,30 @@ function OnboardingForm() {
                                                         className={`px-3 py-1.5 rounded-full text-sm font-medium border cursor-pointer transition-colors ${isSelected ? 'bg-primary text-primary-foreground border-primary' : 'bg-background hover:bg-gray-100 dark:hover:bg-gray-800'}`}
                                                     >
                                                         {cuisine}
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-3">
+                                        <Label>Budget Preference</Label>
+                                        <div className="flex flex-wrap gap-2">
+                                            {(['any', 'low', 'medium', 'high'] as const).map((budgetOption) => {
+                                                const isSelected = formData.budget === budgetOption;
+                                                const labels = {
+                                                    any: '💰 Any',
+                                                    low: '€ Budget',
+                                                    medium: '€€ Mid-range',
+                                                    high: '€€€ Fine dining'
+                                                };
+                                                return (
+                                                    <div
+                                                        key={budgetOption}
+                                                        onClick={() => updateFormData("budget", budgetOption)}
+                                                        className={`px-3 py-1.5 rounded-full text-sm font-medium border cursor-pointer transition-colors ${isSelected ? 'bg-primary text-primary-foreground border-primary' : 'bg-background hover:bg-gray-100 dark:hover:bg-gray-800'}`}
+                                                    >
+                                                        {labels[budgetOption]}
                                                     </div>
                                                 );
                                             })}

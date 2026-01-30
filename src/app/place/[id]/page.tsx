@@ -10,8 +10,9 @@ import { doc, getDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { UserPreferences, GeminiScore } from "@/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, Star, MapPin, Phone, Globe, Clock, ArrowLeft, Sparkles, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { Loader2, Star, MapPin, Phone, Globe, Clock, ArrowLeft, Sparkles, AlertTriangle, CheckCircle2, ThumbsUp, ThumbsDown, UtensilsCrossed } from "lucide-react";
 import { ReservationModal } from "@/components/reservation/reservation-modal";
+import { MatchScoreBadge } from "@/components/search/MatchScoreBadge";
 import toast from "react-hot-toast";
 
 export default function PlaceDetailPage() {
@@ -134,7 +135,7 @@ export default function PlaceDetailPage() {
                         {place.price_level && (
                             <>
                                 <span className="mx-2">•</span>
-                                <span>{"$".repeat(place.price_level)}</span>
+                                <span>{"€".repeat(place.price_level)}</span>
                             </>
                         )}
                     </div>
@@ -143,65 +144,96 @@ export default function PlaceDetailPage() {
 
             <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
 
-                {/* AI Score Section */}
-                <Card className="border-primary/20 bg-primary/5 shadow-md">
+                {/* AI Score Section - "Why for You?" */}
+                <Card className="border-primary/20 bg-gradient-to-br from-primary/5 to-primary/10 shadow-md overflow-hidden">
                     <CardHeader className="pb-2">
                         <CardTitle className="text-lg flex items-center gap-2">
                             <Sparkles className="h-5 w-5 text-primary" />
-                            AI Dietary Check
+                            Why for You?
                         </CardTitle>
                     </CardHeader>
                     <CardContent>
                         {!aiScore ? (
                             <div className="flex flex-col items-center justify-center p-4">
                                 <p className="text-muted-foreground mb-4 text-center text-sm">
-                                    Analyze this restaurant against your specific dietary needs ({preferences?.dietary.join(", ")}).
+                                    Get a personalized AI analysis based on your preferences ({preferences?.dietary?.join(", ") || "not set"}).
                                 </p>
-                                <Button onClick={handleAnalyze} disabled={analyzing} className="w-full sm:w-auto">
+                                <Button onClick={handleAnalyze} disabled={analyzing || !preferences} className="w-full sm:w-auto">
                                     {analyzing ? (
                                         <> <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Analyzing... </>
                                     ) : (
-                                        "Check Suitability"
+                                        "Check Match"
                                     )}
                                 </Button>
                             </div>
                         ) : (
-                            <div className="space-y-4">
-                                <div className="flex items-center justify-between">
-                                    <Badge className={`text-base px-3 py-1 ${aiScore.dietaryScore >= 4 ? "bg-green-500 hover:bg-green-600" :
-                                        aiScore.dietaryScore >= 2.5 ? "bg-yellow-500 hover:bg-yellow-600" :
-                                            "bg-red-500 hover:bg-red-600"
-                                        }`}>
-                                        Score: {aiScore.dietaryScore}/5
-                                    </Badge>
-                                    <span className="text-sm font-medium text-muted-foreground">Based on reviews & menu analysis</span>
+                            <div className="space-y-5">
+                                {/* Score Header */}
+                                <div className="flex items-center gap-4">
+                                    <MatchScoreBadge score={aiScore.matchScore} size="lg" />
+                                    <div className="flex-1">
+                                        <p className="text-sm font-medium text-gray-500 mb-1">Match Score</p>
+                                        <p className="text-gray-700">{aiScore.shortReason}</p>
+                                    </div>
                                 </div>
 
-                                <div className="bg-white/50 p-3 rounded-lg text-sm">
-                                    <p className="font-medium text-gray-900 mb-1">Why?</p>
-                                    <p className="text-gray-700">{aiScore.fitReason}</p>
-                                </div>
-
-                                {aiScore.recommendedDishes?.length > 0 && (
-                                    <div>
-                                        <p className="text-xs font-semibold uppercase text-gray-500 mb-2">Safe Options</p>
-                                        <div className="flex flex-wrap gap-2">
-                                            {aiScore.recommendedDishes.map((dish, i) => (
-                                                <Badge key={i} variant="outline" className="bg-green-50 text-green-700 border-green-200">
-                                                    <CheckCircle2 className="h-3 w-3 mr-1" /> {dish}
-                                                </Badge>
-                                            ))}
+                                {/* Pros & Cons Grid */}
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    {/* Pros */}
+                                    {aiScore.pros && aiScore.pros.length > 0 && (
+                                        <div className="bg-green-50/80 rounded-xl p-4 border border-green-100">
+                                            <p className="text-xs font-semibold uppercase text-green-700 mb-2 flex items-center gap-1">
+                                                <ThumbsUp className="h-3 w-3" /> Pros
+                                            </p>
+                                            <ul className="space-y-1">
+                                                {aiScore.pros.map((pro, i) => (
+                                                    <li key={i} className="flex items-start gap-2 text-sm text-green-800">
+                                                        <CheckCircle2 className="h-4 w-4 text-green-600 mt-0.5 shrink-0" />
+                                                        {pro}
+                                                    </li>
+                                                ))}
+                                            </ul>
                                         </div>
+                                    )}
+
+                                    {/* Cons */}
+                                    {aiScore.cons && aiScore.cons.length > 0 && (
+                                        <div className="bg-amber-50/80 rounded-xl p-4 border border-amber-100">
+                                            <p className="text-xs font-semibold uppercase text-amber-700 mb-2 flex items-center gap-1">
+                                                <ThumbsDown className="h-3 w-3" /> Cons
+                                            </p>
+                                            <ul className="space-y-1">
+                                                {aiScore.cons.map((con, i) => (
+                                                    <li key={i} className="flex items-start gap-2 text-sm text-amber-800">
+                                                        <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+                                                        {con}
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Recommended Dish */}
+                                {aiScore.recommendedDish && (
+                                    <div className="bg-white/60 rounded-xl p-4 border border-gray-100">
+                                        <p className="text-xs font-semibold uppercase text-gray-500 mb-2 flex items-center gap-1">
+                                            <UtensilsCrossed className="h-3 w-3" /> Recommended for You
+                                        </p>
+                                        <p className="text-gray-800 font-medium">{aiScore.recommendedDish}</p>
                                     </div>
                                 )}
 
-                                {aiScore.warnings?.length > 0 && (
-                                    <div>
-                                        <p className="text-xs font-semibold uppercase text-gray-500 mb-2">Warnings</p>
+                                {/* Warnings */}
+                                {aiScore.warnings && aiScore.warnings.length > 0 && (
+                                    <div className="bg-red-50/80 rounded-xl p-4 border border-red-100">
+                                        <p className="text-xs font-semibold uppercase text-red-700 mb-2 flex items-center gap-1">
+                                            <AlertTriangle className="h-3 w-3" /> Warnings
+                                        </p>
                                         <div className="flex flex-wrap gap-2">
                                             {aiScore.warnings.map((warn, i) => (
-                                                <Badge key={i} variant="outline" className="bg-red-50 text-red-700 border-red-200">
-                                                    <AlertTriangle className="h-3 w-3 mr-1" /> {warn}
+                                                <Badge key={i} variant="outline" className="bg-red-100 text-red-700 border-red-200">
+                                                    {warn}
                                                 </Badge>
                                             ))}
                                         </div>
