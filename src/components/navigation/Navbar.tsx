@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
-import { Utensils, LayoutDashboard, User, Search, LogOut, ChevronRight, Menu, X } from "lucide-react";
+import { Utensils, LayoutDashboard, User, Search, LogOut, ChevronRight, Menu, X, Calendar, Globe } from "lucide-react";
 import { auth } from "@/lib/firebase";
 import { signOut } from "firebase/auth";
 import toast from "react-hot-toast";
@@ -50,111 +50,84 @@ export default function Navbar() {
                     </span>
                 </Link>
 
-                {/* Desktop App Switcher - Hidden on Mobile */}
-                <nav className="hidden lg:flex items-center gap-1 bg-gray-100 p-0.5 rounded-full">
-                    <Link href={homePath}>
-                        <Button
-                            variant={!isBusinessPage ? "default" : "ghost"}
-                            size="sm"
-                            className={`rounded-full px-4 h-7 font-bold text-[10px] uppercase tracking-widest ${!isBusinessPage ? "shadow-sm" : "text-gray-500 hover:text-primary"}`}
-                        >
-                            Diner
-                        </Button>
-                    </Link>
-                    <Link href="/for-restaurants">
-                        <Button
-                            variant={isBusinessPage ? "default" : "ghost"}
-                            size="sm"
-                            className={`rounded-full px-4 h-7 font-bold text-[10px] uppercase tracking-widest ${isBusinessPage ? "shadow-sm" : "text-gray-500 hover:text-primary"}`}
-                        >
-                            Business
-                        </Button>
-                    </Link>
-                </nav>
-
-                {/* Desktop Quick Links */}
-                <div className="hidden md:flex items-center gap-4">
-                    {!isBusinessPage ? (
-                        <Link href="/search" className="text-xs font-bold text-gray-600 hover:text-primary transition-colors flex items-center gap-1.5">
-                            <Search className="h-3.5 w-3.5" />
-                            Find Food
-                        </Link>
-                    ) : (
-                        <>
-                            <Link href="/for-restaurants#features" className="text-xs font-bold text-gray-600 hover:text-primary transition-colors">Features</Link>
-                            <Link href="/for-restaurants#pricing" className="text-xs font-bold text-gray-600 hover:text-primary transition-colors">Pricing</Link>
-                        </>
-                    )}
-                </div>
-            </div>
-
-            {/* Desktop Right Nav */}
-            <nav className="hidden md:flex items-center gap-2">
-                <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setLocale(locale === "en" ? "sk" : "en")}
-                    className="font-bold text-[10px] w-7 h-7 p-0 rounded-full border border-gray-100 hover:bg-gray-50"
-                    title={locale === "en" ? "Prepnúť do Slovenčiny" : "Switch to English"}
-                >
-                    {locale === "en" ? "SK" : "EN"}
-                </Button>
-
-                {user ? (
-                    <div className="flex items-center gap-1.5">
-                        {userRole === 'owner' ? (
-                            <>
-                                <Link href="/dashboard">
-                                    <Button variant={pathname.startsWith("/dashboard") ? "default" : "ghost"} size="sm" className="font-bold flex items-center gap-1.5 h-8">
-                                        <LayoutDashboard className="h-3.5 w-3.5" />
-                                        Dashboard
-                                    </Button>
-                                </Link>
-                                <Link href="/profile">
-                                    <Button variant={pathname === "/profile" ? "default" : "ghost"} size="icon" className="rounded-full h-8 w-8">
-                                        <User className="h-3.5 w-3.5" />
-                                    </Button>
-                                </Link>
-                            </>
-                        ) : userRole === 'diner' ? (
-                            <>
-                                <Link href="/profile">
-                                    <Button variant={pathname === "/profile" ? "default" : "ghost"} size="sm" className="font-bold flex items-center gap-1.5 h-8">
-                                        <User className="h-3.5 w-3.5" />
-                                        Profile
-                                    </Button>
-                                </Link>
-                                <Link href="/reservations">
-                                    <Button variant={pathname === "/reservations" ? "default" : "ghost"} size="icon" className="rounded-full h-8 w-8">
-                                        <Utensils className="h-3.5 w-3.5" />
-                                    </Button>
-                                </Link>
-                            </>
-                        ) : (
-                            <Link href="/onboarding">
-                                <Button variant="outline" size="sm" className="border-primary text-primary font-bold hover:bg-primary/5 h-8">
-                                    Complete Setup
-                                </Button>
-                            </Link>
-                        )}
-                        <Button variant="outline" size="icon" onClick={handleLogout} className="rounded-full h-8 w-8 bg-red-50 hover:bg-red-100 border-red-100 text-red-600">
-                            <LogOut className="h-3.5 w-3.5" />
-                        </Button>
-                    </div>
-                ) : (
-                    <div className="flex items-center gap-1.5">
-                        <Link href={`/login${isBusinessPage ? '?role=owner' : ''}`}>
-                            <Button variant="ghost" size="sm" className="font-bold text-gray-700 h-8">Log in</Button>
-                        </Link>
-                        <Link href={`/signup${isBusinessPage ? '?role=owner' : ''}`}>
-                            <Button size="sm" className="font-bold shadow-lg shadow-primary/20 rounded-full px-4 h-8 flex items-center gap-1">
-                                {isBusinessPage ? 'Join' : 'Join Now'}
-                                <ChevronRight className="h-3.5 w-3.5" />
+                {/* App Switcher - Only show when NOT signed in */}
+                {!user && (
+                    <nav className="hidden md:flex items-center gap-1 bg-gray-100 p-0.5 rounded-full">
+                        <Link href="/">
+                            <Button
+                                variant={!isBusinessPage ? "default" : "ghost"}
+                                size="sm"
+                                className={`rounded-full px-3 h-6 font-bold text-[10px] uppercase tracking-widest ${!isBusinessPage ? "shadow-sm" : "text-gray-500 hover:text-primary"}`}
+                            >
+                                Diner
                             </Button>
                         </Link>
-                    </div>
+                        <Link href="/for-restaurants">
+                            <Button
+                                variant={isBusinessPage ? "default" : "ghost"}
+                                size="sm"
+                                className={`rounded-full px-3 h-6 font-bold text-[10px] uppercase tracking-widest ${isBusinessPage ? "shadow-sm" : "text-gray-500 hover:text-primary"}`}
+                            >
+                                Business
+                            </Button>
+                        </Link>
+                    </nav>
                 )}
-            </nav>
+
+                {/* Find Food Link - Always visible for diners */}
+                {(!user || userRole === 'diner') && (
+                    <Link href="/search" className="hidden md:flex text-xs font-bold text-gray-600 hover:text-primary transition-colors items-center gap-1">
+                        <Search className="h-3.5 w-3.5" />
+                        Find Food
+                    </Link>
+                )}
+
+                {/* Dashboard link for owners */}
+                {user && userRole === 'owner' && (
+                    <Link href="/dashboard" className="hidden md:flex text-xs font-bold text-gray-600 hover:text-primary transition-colors items-center gap-1">
+                        <LayoutDashboard className="h-3.5 w-3.5" />
+                        Dashboard
+                    </Link>
+                )}
+            </div>
+
+            {/* Right side - Desktop */}
+            <div className="hidden md:flex items-center gap-2">
+                {user ? (
+                    /* Signed in: Just hamburger menu button */
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 px-3 font-medium flex items-center gap-2"
+                        onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+                    >
+                        <User className="h-4 w-4" />
+                        <span className="text-xs">Menu</span>
+                        {mobileMenuOpen ? <X className="h-3.5 w-3.5" /> : <Menu className="h-3.5 w-3.5" />}
+                    </Button>
+                ) : (
+                    /* Not signed in: Login/Signup + Language */
+                    <>
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setLocale(locale === "en" ? "sk" : "en")}
+                            className="font-bold text-[10px] w-6 h-6 p-0 rounded-full border border-gray-100 hover:bg-gray-50"
+                        >
+                            {locale === "en" ? "SK" : "EN"}
+                        </Button>
+                        <Link href={`/login${isBusinessPage ? '?role=owner' : ''}`}>
+                            <Button variant="ghost" size="sm" className="font-bold text-gray-700 h-7 text-xs">Log in</Button>
+                        </Link>
+                        <Link href={`/signup${isBusinessPage ? '?role=owner' : ''}`}>
+                            <Button size="sm" className="font-bold shadow-md shadow-primary/20 rounded-full px-3 h-7 text-xs flex items-center gap-1">
+                                Join
+                                <ChevronRight className="h-3 w-3" />
+                            </Button>
+                        </Link>
+                    </>
+                )}
+            </div>
 
             {/* Mobile Menu Button */}
             <Button
@@ -163,82 +136,111 @@ export default function Navbar() {
                 className="md:hidden h-8 w-8"
                 onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
             >
-                {mobileMenuOpen ? <X className="h-5102 w-5" /> : <Menu className="h-5 w-5" />}
+                {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
             </Button>
 
-            {/* Mobile Menu Dropdown */}
+            {/* Dropdown Menu (Desktop for signed-in users + Mobile for everyone) */}
             {mobileMenuOpen && (
-                <div className="absolute top-14 left-0 right-0 bg-white border-b shadow-lg z-50 p-4 md:hidden animate-in slide-in-from-top-2">
-                    <nav className="flex flex-col gap-2">
-                        {/* App Switcher */}
-                        <div className="flex gap-2 mb-2">
-                            <Link href={homePath} onClick={closeMobileMenu} className="flex-1">
-                                <Button variant={!isBusinessPage ? "default" : "outline"} size="sm" className="w-full font-bold text-xs">
-                                    Diner App
-                                </Button>
-                            </Link>
-                            <Link href="/for-restaurants" onClick={closeMobileMenu} className="flex-1">
-                                <Button variant={isBusinessPage ? "default" : "outline"} size="sm" className="w-full font-bold text-xs">
-                                    Business
-                                </Button>
-                            </Link>
-                        </div>
-
-                        <hr className="my-2" />
-
-                        {/* Quick Links */}
-                        {!isBusinessPage ? (
-                            <Link href="/search" onClick={closeMobileMenu} className="flex items-center gap-2 p-2 hover:bg-gray-50 rounded-lg">
-                                <Search className="h-4 w-4" />
-                                <span className="font-medium">Find Food</span>
-                            </Link>
-                        ) : (
-                            <>
-                                <Link href="/for-restaurants#features" onClick={closeMobileMenu} className="p-2 hover:bg-gray-50 rounded-lg font-medium">Features</Link>
-                                <Link href="/for-restaurants#pricing" onClick={closeMobileMenu} className="p-2 hover:bg-gray-50 rounded-lg font-medium">Pricing</Link>
-                            </>
-                        )}
-
-                        <hr className="my-2" />
-
-                        {/* Auth Actions */}
+                <div className="absolute top-12 right-0 md:right-4 w-full md:w-56 bg-white border-b md:border md:rounded-lg shadow-lg z-50 p-3 animate-in slide-in-from-top-2">
+                    <nav className="flex flex-col gap-1">
                         {user ? (
+                            /* Signed in menu */
                             <>
+                                {/* Quick Actions */}
+                                {userRole === 'diner' && (
+                                    <>
+                                        <Link href="/search" onClick={closeMobileMenu} className="flex items-center gap-3 p-2.5 hover:bg-gray-50 rounded-lg">
+                                            <Search className="h-4 w-4 text-gray-500" />
+                                            <span className="font-medium text-sm">Find Food</span>
+                                        </Link>
+                                        <hr className="my-1" />
+                                    </>
+                                )}
+
                                 {userRole === 'owner' && (
-                                    <Link href="/dashboard" onClick={closeMobileMenu} className="flex items-center gap-2 p-2 hover:bg-gray-50 rounded-lg">
-                                        <LayoutDashboard className="h-4 w-4" />
-                                        <span className="font-medium">Dashboard</span>
+                                    <>
+                                        <Link href="/dashboard" onClick={closeMobileMenu} className="flex items-center gap-3 p-2.5 hover:bg-gray-50 rounded-lg">
+                                            <LayoutDashboard className="h-4 w-4 text-gray-500" />
+                                            <span className="font-medium text-sm">Dashboard</span>
+                                        </Link>
+                                        <hr className="my-1" />
+                                    </>
+                                )}
+
+                                {/* Profile & Settings */}
+                                <Link href="/profile" onClick={closeMobileMenu} className="flex items-center gap-3 p-2.5 hover:bg-gray-50 rounded-lg">
+                                    <User className="h-4 w-4 text-gray-500" />
+                                    <span className="font-medium text-sm">Profile</span>
+                                </Link>
+
+                                {userRole === 'diner' && (
+                                    <Link href="/reservations" onClick={closeMobileMenu} className="flex items-center gap-3 p-2.5 hover:bg-gray-50 rounded-lg">
+                                        <Calendar className="h-4 w-4 text-gray-500" />
+                                        <span className="font-medium text-sm">Reservations</span>
                                     </Link>
                                 )}
-                                <Link href="/profile" onClick={closeMobileMenu} className="flex items-center gap-2 p-2 hover:bg-gray-50 rounded-lg">
-                                    <User className="h-4 w-4" />
-                                    <span className="font-medium">Profile</span>
-                                </Link>
-                                <button onClick={() => { handleLogout(); closeMobileMenu(); }} className="flex items-center gap-2 p-2 hover:bg-red-50 rounded-lg text-red-600 w-full text-left">
+
+                                <button
+                                    onClick={() => { setLocale(locale === "en" ? "sk" : "en"); closeMobileMenu(); }}
+                                    className="flex items-center gap-3 p-2.5 hover:bg-gray-50 rounded-lg w-full text-left"
+                                >
+                                    <Globe className="h-4 w-4 text-gray-500" />
+                                    <span className="font-medium text-sm">{locale === "en" ? "Slovenčina" : "English"}</span>
+                                </button>
+
+                                <hr className="my-1" />
+
+                                <button
+                                    onClick={() => { handleLogout(); closeMobileMenu(); }}
+                                    className="flex items-center gap-3 p-2.5 hover:bg-red-50 rounded-lg text-red-600 w-full text-left"
+                                >
                                     <LogOut className="h-4 w-4" />
-                                    <span className="font-medium">Logout</span>
+                                    <span className="font-medium text-sm">Logout</span>
                                 </button>
                             </>
                         ) : (
-                            <div className="flex gap-2">
-                                <Link href={`/login${isBusinessPage ? '?role=owner' : ''}`} onClick={closeMobileMenu} className="flex-1">
-                                    <Button variant="outline" size="sm" className="w-full">Log in</Button>
-                                </Link>
-                                <Link href={`/signup${isBusinessPage ? '?role=owner' : ''}`} onClick={closeMobileMenu} className="flex-1">
-                                    <Button size="sm" className="w-full">Join Now</Button>
-                                </Link>
-                            </div>
-                        )}
+                            /* Not signed in menu (mobile only) */
+                            <>
+                                <div className="flex gap-2 mb-2">
+                                    <Link href="/" onClick={closeMobileMenu} className="flex-1">
+                                        <Button variant={!isBusinessPage ? "default" : "outline"} size="sm" className="w-full font-bold text-xs h-8">
+                                            Diner
+                                        </Button>
+                                    </Link>
+                                    <Link href="/for-restaurants" onClick={closeMobileMenu} className="flex-1">
+                                        <Button variant={isBusinessPage ? "default" : "outline"} size="sm" className="w-full font-bold text-xs h-8">
+                                            Business
+                                        </Button>
+                                    </Link>
+                                </div>
 
-                        {/* Language Toggle */}
-                        <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => { setLocale(locale === "en" ? "sk" : "en"); closeMobileMenu(); }}
-                            className="justify-start mt-2"
-                        >
-                            🌐 {locale === "en" ? "Switch to Slovak" : "Switch to English"}
-                        </Button>
+                                <hr className="my-2" />
+
+                                <Link href="/search" onClick={closeMobileMenu} className="flex items-center gap-3 p-2.5 hover:bg-gray-50 rounded-lg">
+                                    <Search className="h-4 w-4 text-gray-500" />
+                                    <span className="font-medium text-sm">Find Food</span>
+                                </Link>
+
+                                <hr className="my-2" />
+
+                                <div className="flex gap-2">
+                                    <Link href={`/login${isBusinessPage ? '?role=owner' : ''}`} onClick={closeMobileMenu} className="flex-1">
+                                        <Button variant="outline" size="sm" className="w-full h-8">Log in</Button>
+                                    </Link>
+                                    <Link href={`/signup${isBusinessPage ? '?role=owner' : ''}`} onClick={closeMobileMenu} className="flex-1">
+                                        <Button size="sm" className="w-full h-8">Join</Button>
+                                    </Link>
+                                </div>
+
+                                <button
+                                    onClick={() => { setLocale(locale === "en" ? "sk" : "en"); closeMobileMenu(); }}
+                                    className="flex items-center gap-3 p-2.5 hover:bg-gray-50 rounded-lg w-full text-left mt-2"
+                                >
+                                    <Globe className="h-4 w-4 text-gray-500" />
+                                    <span className="font-medium text-sm">{locale === "en" ? "Slovenčina" : "English"}</span>
+                                </button>
+                            </>
+                        )}
                     </nav>
                 </div>
             )}
