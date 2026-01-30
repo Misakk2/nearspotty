@@ -61,5 +61,7 @@ dist-ssr/
 next-env.d.ts
 
 # Misc
-*.pem# Agent
+*.pem
+
+# Agent
 .agent/
