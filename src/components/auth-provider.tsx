@@ -35,7 +35,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                             const data = docSnapshot.data();
                             setUserRole(data.role || "diner");
                             // Set subscription tier from Firestore
-                            const tier = data.subscriptionTier || (data.plan === 'premium' ? 'premium' : 'free');
+                            const tier = data.tier || data.subscriptionTier || (data.plan === 'premium' ? 'premium' : 'free');
                             setSubscriptionTier(tier);
                         } else {
                             setUserRole("no_role");

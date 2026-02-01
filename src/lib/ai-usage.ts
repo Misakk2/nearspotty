@@ -42,18 +42,18 @@ export async function checkAIUsage(userId: string): Promise<AIUsageStatus> {
     }
 
     const userData = userDoc.data()!;
-    const tier: 'free' | 'premium' = userData.subscriptionTier || userData.plan === 'premium' ? 'premium' : 'free';
-    const aiUsage = userData.aiUsage || { count: 0, lastResetDate: new Date().toISOString() };
+    const usage = userData.usage || { count: 0, lastResetDate: new Date().toISOString() };
+    const tier: 'free' | 'premium' = userData.tier || userData.subscriptionTier || (userData.plan === 'premium' ? 'premium' : 'free');
 
     const now = Date.now();
-    const lastReset = new Date(aiUsage.lastResetDate).getTime();
+    const lastReset = new Date(usage.lastResetDate).getTime();
 
     // Check if we need to reset (>30 days)
     if (now - lastReset >= THIRTY_DAYS_MS) {
         const newResetDate = new Date().toISOString();
         await userRef.update({
-            'aiUsage.count': 0,
-            'aiUsage.lastResetDate': newResetDate
+            'usage.count': 0,
+            'usage.lastResetDate': newResetDate
         });
 
         return {
@@ -69,10 +69,10 @@ export async function checkAIUsage(userId: string): Promise<AIUsageStatus> {
     // Premium users have unlimited
     if (tier === 'premium') {
         return {
-            count: aiUsage.count,
+            count: usage.count,
             canUse: true,
             remaining: Infinity,
-            lastResetDate: aiUsage.lastResetDate,
+            lastResetDate: usage.lastResetDate,
             tier,
             limitReached: false
         };
@@ -80,14 +80,14 @@ export async function checkAIUsage(userId: string): Promise<AIUsageStatus> {
 
     // Free user - check limit
     const limit = DINER_LIMITS.free.aiChecksPerMonth;
-    const remaining = Math.max(0, limit - aiUsage.count);
-    const canUse = aiUsage.count < limit;
+    const remaining = Math.max(0, limit - usage.count);
+    const canUse = usage.count < limit;
 
     return {
-        count: aiUsage.count,
+        count: usage.count,
         canUse,
         remaining,
-        lastResetDate: aiUsage.lastResetDate,
+        lastResetDate: usage.lastResetDate,
         tier,
         limitReached: !canUse
     };
@@ -104,7 +104,7 @@ export async function incrementAIUsage(userId: string): Promise<void> {
     if (!userDoc.exists) {
         // Initialize for new user
         await userRef.set({
-            aiUsage: {
+            usage: {
                 count: 1,
                 lastResetDate: new Date().toISOString()
             }
@@ -113,11 +113,11 @@ export async function incrementAIUsage(userId: string): Promise<void> {
     }
 
     const userData = userDoc.data()!;
-    const currentCount = userData.aiUsage?.count || 0;
+    const currentCount = userData.usage?.count || 0;
 
     await userRef.update({
-        'aiUsage.count': currentCount + 1,
-        'aiUsage.lastResetDate': userData.aiUsage?.lastResetDate || new Date().toISOString()
+        'usage.count': currentCount + 1,
+        'usage.lastResetDate': userData.usage?.lastResetDate || new Date().toISOString()
     });
 }
 
@@ -133,15 +133,18 @@ export async function getUserTier(userId: string): Promise<'free' | 'premium'> {
     const data = userDoc.data()!;
 
     // If explicitly set as premium and subscription is active
-    if (data.subscriptionTier === 'premium' || data.plan === 'premium') {
+    if (data.tier === 'premium' || data.subscriptionTier === 'premium' || data.plan === 'premium') {
         // Check if subscription hasn't expired
-        if (data.currentPeriodEnd) {
-            const endDate = new Date(data.currentPeriodEnd).getTime();
+        // Support both new nested subscription object and legacy flat fields
+        const currentPeriodEnd = data.subscription?.current_period_end || data.currentPeriodEnd;
+
+        if (currentPeriodEnd) {
+            const endDate = new Date(currentPeriodEnd).getTime();
             if (Date.now() > endDate) {
                 // Subscription expired - downgrade to free
                 await adminDb.collection('users').doc(userId).update({
-                    subscriptionTier: 'free',
-                    subscriptionStatus: 'expired'
+                    tier: 'free',
+                    'subscription.status': 'expired'
                 });
                 return 'free';
             }

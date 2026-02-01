@@ -7,8 +7,8 @@ import { CTASection } from "@/components/landing/FinalSections";
 import { Footer } from "@/components/landing/Footer";
 import { getTranslation } from "@/lib/i18n-server";
 
-export default function Home() {
-  const { t } = getTranslation();
+export default async function Home() {
+  const { t } = await getTranslation();
 
   const steps = (t("landing.steps") as { title: string; subtitle: string }[]).map((step, i) => ({
     ...step,

@@ -12,8 +12,8 @@ const CACHE_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
 
 export async function POST(request: NextRequest) {
     try {
-        // Simple rate limiting based on IP
-        const ip = request.ip || request.headers.get("x-forwarded-for") || "unknown";
+        // Simple rate limiting based on IP - use x-forwarded-for since request.ip is not available in Next.js 16+
+        const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || request.headers.get("x-real-ip") || "unknown";
         const rateLimit = await checkRateLimit(`gemini_score_${ip}`, { limit: 10, windowMs: 60 * 1000 }); // 10 per minute
 
         if (rateLimit.limitReached) {

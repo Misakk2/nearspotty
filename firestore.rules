@@ -10,13 +10,18 @@ service cloud.firestore {
       return request.auth.uid == userId;
     }
 
-    // User profiles and all their subcollections (preferences, settings, etc)
+    // User profiles
     match /users/{userId} {
       allow read, write: if isOwner(userId);
       
       match /{allPaths=**} {
         allow read, write: if isOwner(userId);
       }
+    }
+
+    // Cities Cache - Authenticated users can read/write for caching mechanism
+    match /cities/{cityId} {
+      allow read, write: if isAuthenticated();
     }
 
     // Restaurants/Websites

@@ -9,6 +9,7 @@ import { MatchScoreBadge } from "./MatchScoreBadge";
 export interface PlaceCardProps {
     place: Place;
     onClick?: () => void;
+    onBeforeNavigate?: () => void; // Called before navigating to detail page
     preferences?: UserPreferences | null;
     score?: GeminiScore | null; // Score from batch-scoring
     scoringLoading?: boolean;
@@ -18,6 +19,7 @@ export interface PlaceCardProps {
 export default function PlaceCard({
     place,
     onClick,
+    onBeforeNavigate,
     score,
     scoringLoading = false,
     limitReached = false
@@ -27,11 +29,20 @@ export default function PlaceCard({
         ? `https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photoreference=${place.photos[0].photo_reference}&key=${process.env.NEXT_PUBLIC_GOOGLE_PLACES_KEY}`
         : "/placeholder-restaurant.jpg";
 
+    const handleClick = (e: React.MouseEvent) => {
+        // Save scroll position before navigation
+        if (onBeforeNavigate) {
+            onBeforeNavigate();
+        }
+        if (onClick) {
+            onClick();
+        }
+    };
+
     return (
-        <Link href={`/place/${place.place_id}`} className="block">
+        <Link href={`/place/${place.place_id}`} className="block" onClick={handleClick}>
             <Card
                 className="hover:shadow-md transition-shadow cursor-pointer overflow-hidden border-none shadow-sm bg-card group"
-                onClick={onClick}
             >
                 <div className="flex flex-row md:flex-col h-32 md:h-auto">
                     {/* Image */}

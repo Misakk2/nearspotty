@@ -13,9 +13,9 @@ import { useI18n } from "@/components/i18n-provider";
 
 export default function Navbar() {
     const pathname = usePathname();
-    const { user, userRole } = useAuth();
     const { locale, setLocale } = useI18n();
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+    const { user, userRole, subscriptionTier } = useAuth();
 
     const isBusinessPage = pathname.startsWith("/for-restaurants") || pathname.startsWith("/dashboard");
 
@@ -94,17 +94,37 @@ export default function Navbar() {
             {/* Right side - Desktop */}
             <div className="hidden md:flex items-center gap-2">
                 {user ? (
-                    /* Signed in: Just hamburger menu button */
-                    <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-8 px-3 font-medium flex items-center gap-2"
-                        onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-                    >
-                        <User className="h-4 w-4" />
-                        <span className="text-xs">Menu</span>
-                        {mobileMenuOpen ? <X className="h-3.5 w-3.5" /> : <Menu className="h-3.5 w-3.5" />}
-                    </Button>
+                    <div className="flex items-center gap-3">
+                        <div className="flex flex-col items-end mr-1">
+                            <span className="text-sm font-semibold text-gray-800 leading-none">
+                                {user.displayName || user.email?.split('@')[0] || "User"}
+                            </span>
+                            {subscriptionTier === 'premium' ? (
+                                <span className="text-[10px] bg-gradient-to-r from-amber-400 to-yellow-500 text-white px-1.5 py-0.5 rounded font-bold uppercase tracking-wider shadow-sm mt-0.5">
+                                    Premium
+                                </span>
+                            ) : (
+                                <span className="text-[10px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider mt-0.5">
+                                    Free
+                                </span>
+                            )}
+                        </div>
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-9 w-9 p-0 rounded-full border border-gray-200 hover:bg-gray-50 overflow-hidden"
+                            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+                        >
+                            {user.photoURL ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img src={user.photoURL} alt="Profile" className="h-full w-full object-cover" />
+                            ) : (
+                                <div className="h-full w-full bg-primary/10 flex items-center justify-center text-primary font-bold">
+                                    {user.email?.[0]?.toUpperCase() || "U"}
+                                </div>
+                            )}
+                        </Button>
+                    </div>
                 ) : (
                     /* Not signed in: Login/Signup + Language */
                     <>

@@ -3,6 +3,7 @@
  * 
  * Scores multiple restaurants in a single Gemini API call for efficiency.
  * Uses user profile hash for caching - scores are cached per user preferences.
+ * OPTIMIZED: Returns "Lite" scores (no pros/cons) to save tokens.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -16,7 +17,7 @@ import { GeminiScore } from "@/types";
 const genAI = new GoogleGenerativeAI(process.env.NEXT_PUBLIC_GEMINI_API_KEY || "");
 const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" });
 
-// Cache duration: 7 days (shorter than individual scores since batch may be less accurate)
+// Cache duration: 7 days
 const CACHE_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
 
 interface BatchPlace {
@@ -37,8 +38,8 @@ interface BatchScoreResult {
 export async function POST(request: NextRequest) {
     try {
         // Rate limiting
-        const ip = request.ip || request.headers.get("x-forwarded-for") || "unknown";
-        const rateLimit = await checkRateLimit(`gemini_batch_${ip}`, { limit: 5, windowMs: 60 * 1000 }); // 5 per minute
+        const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+        const rateLimit = await checkRateLimit(`gemini_batch_${ip}`, { limit: 5, windowMs: 60 * 1000 });
 
         if (rateLimit.limitReached) {
             return NextResponse.json({ error: "Too many requests. Please try again in a minute." }, { status: 429 });
@@ -54,11 +55,10 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: "User profile required" }, { status: 400 });
         }
 
-        // Check subscription limits if userId provided
+        // Check subscription limits
         let usageStatus = null;
         if (userId) {
             usageStatus = await checkAIUsage(userId);
-
             if (usageStatus.limitReached) {
                 return NextResponse.json({
                     error: "AI check limit reached",
@@ -99,81 +99,99 @@ export async function POST(request: NextRequest) {
                     continue;
                 }
             }
-
             uncachedPlaces.push(place);
         }
-
-        console.log(`[BatchScore] ${results.length} cached, ${uncachedPlaces.length} to score`);
 
         // If all are cached, return immediately
         if (uncachedPlaces.length === 0) {
             return NextResponse.json({ results, allCached: true });
         }
 
-        // Build batch prompt for uncached places
+        // Build Optimised Batch Prompt
+        // 1. Minify User JSON
+        // 2. Reduce Instruction Verbosity
+        // 3. Request Minimal Output (No pros/cons)
+
         const placesInfo = uncachedPlaces.map((p, i) =>
-            `${i + 1}. "${p.name}" - Type: ${p.types.slice(0, 3).join(', ')} | Rating: ${p.rating || 'N/A'} | Price: ${'€'.repeat(p.price_level || 1)} | Location: ${p.vicinity || 'N/A'}`
+            `${i + 1}. "${p.name}" (${p.types.slice(0, 2).join(',')}) | Rat:${p.rating || '-'} | €${p.price_level || '-'}`
         ).join('\n');
 
         const prompt = `
-Score these ${uncachedPlaces.length} restaurants for a user with these preferences:
-${JSON.stringify(userProfile, null, 2)}
+Task: Score ${uncachedPlaces.length} places (0-100) for this user profile:
+${JSON.stringify(userProfile)}
 
-RESTAURANTS:
+Places:
 ${placesInfo}
 
-For EACH restaurant, provide a matchScore (0-100) based on:
-- How well types/cuisine match user's favorite cuisines
-- Price level vs user's budget preference
-- Dietary compatibility based on restaurant type
+Rules:
+- Match based on cuisine, budget, dietary.
+- Return JSON Array based on index order.
+- NO markdown.
 
-Output a JSON array (no markdown) with one object per restaurant in the same order:
+Output Schema:
 [
   {
     "matchScore": 0-100,
-    "shortReason": "1 sentence why this matches/doesn't match",
-    "pros": ["advantage1"],
-    "cons": ["disadvantage1"] or [],
-    "recommendedDish": "likely good option based on cuisine type",
-    "warnings": [] or ["concern"]
+    "shortReason": "Very brief reason (max 10 words)",
+    "recommendedDish": "Name of 1 dish or 'N/A'"
   }
 ]
 `;
 
-        const result = await model.generateContent(prompt);
-        const response = await result.response;
-        const text = response.text();
-
-        // Parse response
-        const jsonStr = text.replace(/```json\n?|\n?```/g, "").trim();
-        let scores: GeminiScore[];
+        // Timeout Handling using Promise.race (since signal might not be supported)
+        const GEMINI_TIMEOUT_MS = 25000;
 
         try {
-            scores = JSON.parse(jsonStr);
-        } catch {
-            console.error("[BatchScore] Failed to parse Gemini response:", text);
-            return NextResponse.json({ error: "AI response parsing failed" }, { status: 500 });
-        }
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const racePromise = Promise.race([
+                model.generateContent({
+                    contents: [{ role: "user", parts: [{ text: prompt }] }],
+                }),
+                new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error("GEMINI_TIMEOUT")), GEMINI_TIMEOUT_MS)
+                )
+            ]);
 
-        // Cache and add results
-        for (let i = 0; i < uncachedPlaces.length; i++) {
-            const place = uncachedPlaces[i];
-            const score = scores[i];
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const result = await racePromise as any;
 
-            if (score) {
-                // Ensure matchScore is valid
-                if (typeof score.matchScore === 'number') {
-                    score.matchScore = Math.max(0, Math.min(100, Math.round(score.matchScore)));
-                }
+            const response = await result.response;
+            const text = response.text();
 
-                // Cache this score
+            // Parse response
+            const jsonStr = text.replace(/```json\n?|\n?```/g, "").trim();
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            let scores: any[];
+
+            try {
+                scores = JSON.parse(jsonStr);
+            } catch {
+                console.error("[BatchScore] Failed to parse:", text);
+                return NextResponse.json({ error: "AI response parsing failed" }, { status: 500 });
+            }
+
+            // Cache and add results
+            for (let i = 0; i < uncachedPlaces.length; i++) {
+                const place = uncachedPlaces[i];
+                const rawScore = scores[i] || {};
+
+                const score: GeminiScore = {
+                    matchScore: typeof rawScore.matchScore === 'number' ? Math.max(0, Math.min(100, Math.round(rawScore.matchScore))) : 50,
+                    shortReason: rawScore.shortReason || "Analysis unavailable",
+                    recommendedDish: rawScore.recommendedDish || "",
+                    pros: [], // Empty for batch lite version
+                    cons: [],
+                    warnings: []
+                };
+
                 const cacheKey = `batch_${place.place_id}_${profileHash}`;
-                adminDb.collection('restaurant_scores').doc(cacheKey).set({
+                // Async cache set (fire & forget-ish)
+                await adminDb.collection('restaurant_scores').doc(cacheKey).set({
                     placeId: place.place_id,
                     profileHash,
                     score,
                     timestamp: now
-                }).catch(err => console.error("[BatchScore] Cache failed:", err));
+                });
 
                 results.push({
                     place_id: place.place_id,
@@ -181,25 +199,38 @@ Output a JSON array (no markdown) with one object per restaurant in the same ord
                     cached: false
                 });
             }
-        }
 
-        // Increment usage count for authenticated users (only if we actually scored something)
-        if (userId && uncachedPlaces.length > 0) {
-            await incrementAIUsage(userId);
-        }
+            // Increment usage
+            if (userId && uncachedPlaces.length > 0) {
+                await incrementAIUsage(userId);
+            }
 
-        return NextResponse.json({
-            results,
-            allCached: false,
-            scoredCount: uncachedPlaces.length,
-            usage: usageStatus ? {
-                remaining: usageStatus.remaining - 1,
-                tier: usageStatus.tier
-            } : null
-        });
+            return NextResponse.json({
+                results,
+                allCached: false,
+                scoredCount: uncachedPlaces.length,
+                usage: usageStatus ? {
+                    remaining: Math.max(0, usageStatus.remaining - 1),
+                    tier: usageStatus.tier
+                } : null
+            });
+
+        } catch (error) {
+            // clearTimeout(timeoutId); // Removed
+            console.error("[BatchScore] API Error:", error);
+            // Check for timeout error string
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            if ((error as any).message === "GEMINI_TIMEOUT") {
+                return NextResponse.json({
+                    error: "AI is taking too long. Please try again.",
+                    code: "TIMEOUT"
+                }, { status: 504 });
+            }
+            return NextResponse.json({ error: "AI Service Unavailable" }, { status: 503 });
+        }
 
     } catch (error) {
-        console.error("[BatchScore] Error:", error);
-        return NextResponse.json({ error: "Batch scoring failed" }, { status: 500 });
+        console.error("[BatchScore] Critical Error:", error);
+        return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
     }
 }

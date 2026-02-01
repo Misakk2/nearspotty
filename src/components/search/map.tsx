@@ -2,22 +2,33 @@
 
 import { useEffect, useRef, useState } from "react";
 import loader from "@/lib/google-maps";
-import { getLocationFromIP } from "@/lib/ip-geolocation";
 
 interface MapProps {
     className?: string;
     onLoad?: (map: google.maps.Map) => void;
-    /** Initial center coordinates. If not provided, will try device geolocation first. */
+    /** Initial center coordinates for the map */
     initialCenter?: { lat: number; lng: number };
+    /** User's current GPS location - displays a blue dot marker */
+    userLocation?: { lat: number; lng: number };
 }
 
 // Default fallback location (Bratislava)
 const DEFAULT_CENTER = { lat: 48.1486, lng: 17.1077 };
 
-export default function Map({ className, onLoad, initialCenter }: MapProps) {
+/**
+ * Map component - displays Google Map with optional user location marker
+ * 
+ * - Geolocation is handled by parent component
+ * - Shows Blue Dot at userLocation if provided
+ * - initialCenter sets the map's starting position
+ */
+export default function Map({ className, onLoad, initialCenter, userLocation }: MapProps) {
     const mapRef = useRef<HTMLDivElement>(null);
     const [map, setMap] = useState<google.maps.Map | null>(null);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const userMarkerRef = useRef<any>(null);
 
+    // Initialize map
     useEffect(() => {
         if (!mapRef.current || map) return;
 
@@ -25,38 +36,7 @@ export default function Map({ className, onLoad, initialCenter }: MapProps) {
         (loader as any).importLibrary("maps").then(async () => {
             const { Map } = await google.maps.importLibrary("maps") as google.maps.MapsLibrary;
 
-            // Determine initial center: prop > device geolocation > IP geolocation > default
-            let center = initialCenter || DEFAULT_CENTER;
-
-            // If no initialCenter provided, try device geolocation first
-            if (!initialCenter && navigator.geolocation) {
-                try {
-                    const position = await new Promise<GeolocationPosition>((resolve, reject) => {
-                        navigator.geolocation.getCurrentPosition(resolve, reject, {
-                            enableHighAccuracy: true,
-                            timeout: 5000,
-                            maximumAge: 60000
-                        });
-                    });
-                    center = {
-                        lat: position.coords.latitude,
-                        lng: position.coords.longitude
-                    };
-                    console.log("[Map] Using device geolocation");
-                } catch (geoError) {
-                    // Geolocation failed - try IP fallback
-                    console.log("[Map] Device geolocation failed, trying IP fallback...", geoError);
-                    try {
-                        const ipLocation = await getLocationFromIP();
-                        if (ipLocation) {
-                            center = { lat: ipLocation.lat, lng: ipLocation.lng };
-                            console.log(`[Map] Using IP geolocation: ${ipLocation.city}`);
-                        }
-                    } catch (ipError) {
-                        console.log("[Map] IP geolocation also failed, using default center", ipError);
-                    }
-                }
-            }
+            const center = initialCenter || DEFAULT_CENTER;
 
             const newMap = new Map(mapRef.current as HTMLElement, {
                 center,
@@ -73,5 +53,48 @@ export default function Map({ className, onLoad, initialCenter }: MapProps) {
         }).catch((e: unknown) => console.error("Error loading Google Maps", e));
     }, [map, onLoad, initialCenter]);
 
+    // Update or create Blue Dot user marker
+    useEffect(() => {
+        if (!map || !userLocation) return;
+
+        const updateUserMarker = async () => {
+            try {
+                const { AdvancedMarkerElement } = await google.maps.importLibrary("marker") as google.maps.MarkerLibrary;
+
+                // Remove existing marker
+                if (userMarkerRef.current) {
+                    userMarkerRef.current.map = null;
+                }
+
+                // Create Blue Dot element
+                const blueDot = document.createElement("div");
+                blueDot.innerHTML = `
+                    <div style="
+                        width: 20px;
+                        height: 20px;
+                        background: #4285F4;
+                        border: 3px solid white;
+                        border-radius: 50%;
+                        box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+                    "></div>
+                `;
+
+                // Create marker at user's position
+                userMarkerRef.current = new AdvancedMarkerElement({
+                    position: userLocation,
+                    map: map,
+                    title: "Your location",
+                    content: blueDot.firstElementChild as HTMLElement,
+                    zIndex: 1000, // Above other markers
+                });
+            } catch (error) {
+                console.error("[Map] Failed to create user marker:", error);
+            }
+        };
+
+        updateUserMarker();
+    }, [map, userLocation]);
+
     return <div ref={mapRef} className={`h-full w-full rounded-xl overflow-hidden shadow-sm ${className}`} />;
 }
+

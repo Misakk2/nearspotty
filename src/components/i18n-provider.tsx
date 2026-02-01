@@ -15,22 +15,13 @@ interface I18nContextType {
 
 const I18nContext = createContext<I18nContextType | undefined>(undefined);
 
-export function I18nProvider({ children }: { children: React.ReactNode }) {
-    const [locale, setLocale] = useState<Locale>("sk"); // Default to SK
-
-    // Load from localStorage if available
-    useEffect(() => {
-        const savedLocale = localStorage.getItem("locale") as Locale;
-        if (savedLocale && (savedLocale === "sk" || savedLocale === "en")) {
-            setLocale(savedLocale);
-        }
-    }, []);
+export function I18nProvider({ children, initialLocale = "en" }: { children: React.ReactNode, initialLocale?: Locale }) {
+    const [locale, setLocale] = useState<Locale>(initialLocale);
 
     const handleSetLocale = (newLocale: Locale) => {
         setLocale(newLocale);
-        localStorage.setItem("locale", newLocale);
-        // Set cookie for server-side access
-        document.cookie = `locale=${newLocale}; path=/; max-age=31536000`;
+        // Set cookie for server-side access (and next visit persistence)
+        document.cookie = `locale=${newLocale}; path=/; max-age=31536000; SameSite=Lax`;
         // Refresh to apply changes to server components
         window.location.reload();
     };

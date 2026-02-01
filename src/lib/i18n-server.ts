@@ -4,9 +4,9 @@ import { cookies } from "next/headers";
 
 const translations = { sk, en };
 
-export function getTranslation() {
-    const cookieStore = cookies();
-    const locale = (cookieStore.get("locale")?.value || "sk") as "sk" | "en";
+export async function getTranslation() {
+    const cookieStore = await cookies();
+    const locale = (cookieStore.get("locale")?.value || "en") as "sk" | "en";
 
     const t = (key: string): unknown => {
         const keys = key.split(".");
