@@ -1,4 +1,5 @@
 "use client";
+import { useRouter, useSearchParams } from "next/navigation";
 import Map from "@/components/search/map";
 import ProtectedRoute from "@/components/protected-route";
 import RoleGuard from "@/components/RoleGuard";
@@ -19,6 +20,7 @@ import Link from "next/link";
 import CategoryGrid from "@/components/search/CategoryGrid";
 import { APP_CATEGORIES } from "@/config/categories";
 import { useSubscriptionSync } from "@/hooks/useSubscriptionSync";
+import MobileSearch from "@/components/search/MobileSearch";
 import { useSearchState } from "@/hooks/useSearchState";
 
 // Score map type for storing scores by place_id
@@ -26,6 +28,9 @@ type ScoreMap = Record<string, GeminiScore>;
 
 export default function SearchPage() {
     const { user } = useAuth();
+    const router = useRouter();
+    const searchParams = useSearchParams();
+
     const [searchQuery, setSearchQuery] = useState("");
     const [places, setPlaces] = useState<Place[]>([]);
     const [loading, setLoading] = useState(false);
@@ -57,37 +62,71 @@ export default function SearchPage() {
     // Sync subscription on mount
     useSubscriptionSync();
 
-    // React Query state persistence
+    // React Query state persistence (Keeping hook for cache, but URL is source of truth for nav)
     const { state: cachedState, setPlaces: cacheSetPlaces, updateScores: cacheUpdateScores, setCategory: cacheSetCategory, saveScrollPosition, setLocation: cacheSetLocation } = useSearchState();
 
-    // Restore state from React Query cache on mount (for back navigation)
-    const hasRestored = useRef(false);
+    // 1. URL State Management (Source of Truth)
     useEffect(() => {
-        if (!hasRestored.current && cachedState.places.length > 0) {
-            hasRestored.current = true;
-            console.log("[SearchPage] Restoring state from cache:", cachedState.places.length, "places");
+        const q = searchParams.get("q") || searchParams.get("keyword");
+        const lat = searchParams.get("lat");
+        const lng = searchParams.get("lng");
+        const category = searchParams.get("category");
+        const action = searchParams.get("action");
 
-            // Restore places and scores
-            setPlaces(cachedState.places);
-            setScores(cachedState.scores);
-            setCenter(cachedState.center);
-            if (cachedState.cityId) setCityId(cachedState.cityId);
-            if (cachedState.selectedCategory) setSelectedCategory(cachedState.selectedCategory);
-
-            // Restore scroll position after a brief delay for DOM to render
-            if (cachedState.scrollPosition > 0) {
-                setTimeout(() => {
-                    const container = document.querySelector('[data-results-container]');
-                    if (container) {
-                        container.scrollTop = cachedState.scrollPosition;
-                    }
-                }, 100);
+        // Restore state from URL if present
+        if (lat && lng) {
+            const newCenter = { lat: parseFloat(lat), lng: parseFloat(lng) };
+            setCenter(newCenter);
+            // Optionally update map view if instance ready
+            if (mapInstance) {
+                mapInstance.setCenter(newCenter);
             }
-
-            // Skip auto-init if restoring
-            hasAutoInitialized.current = true;
         }
-    }, [cachedState]);
+
+        if (q) setSearchQuery(q);
+        if (category) setSelectedCategory(category);
+
+        // Auto-trigger search if params exist and we haven't loaded places yet
+        // OR if the URL changes basically. But we must avoid loops.
+        // We will trigger fetchPlaces ONLY if we interpret this as a "navigation" event
+        // For simplicity, we can rely on a separate effect triggering when searchQuery/center changes via URL
+
+        if (action === "use_location" && !userLocation) {
+            // Handle special action from Navbar
+            handleUseLocation();
+            // Clean up URL param
+            const newParams = new URLSearchParams(searchParams.toString());
+            newParams.delete("action");
+            router.replace(`/search?${newParams.toString()}`);
+        }
+
+    }, [searchParams, mapInstance]); // userLocation dep removed to avoid loops, added only if needed
+
+    // 2. Fetch Places when URL-derived state implies a search is needed
+    // We need to be careful not to fetch 2x (once from cache, once from URL).
+    // Let's rely on the explicit 'handleSearch' or initial load logic.
+    // If URL has params, we should probably fetch.
+    useEffect(() => {
+        const q = searchParams.get("q") || searchParams.get("keyword");
+        const lat = searchParams.get("lat");
+        const lng = searchParams.get("lng");
+        const category = searchParams.get("category");
+
+        if ((q || category) && lat && lng) {
+            // Check if we already have results matching this? 
+            // Or just fetch because URL > Cache.
+            // We'll prevent refetch if places are already populated with same query?
+            // For now, simpler is specific fetch.
+
+            // Note: We need to pass the values directly as state might not be updated yet in this render cycle
+            fetchPlaces(
+                { lat: parseFloat(lat), lng: parseFloat(lng) },
+                q || category || undefined
+            );
+        }
+    }, [searchParams]); // Dependent on searchParams changing.
+
+    // Restore scroll position logic can happen after loading results.
 
     // Scroll to selected place
     useEffect(() => {
@@ -180,19 +219,24 @@ export default function SearchPage() {
                 }
             }
 
-            const res = await fetch(`/api/places/nearby?${params.toString()}`, {
+            const res = await fetch(`/api/search?${params.toString()}`, {
                 headers: {
                     'Authorization': `Bearer ${token}`
                 }
             });
             const data = await res.json();
 
-            // Handle subscription limit reached
-            if (res.status === 402 || data.code === 'LIMIT_REACHED') {
+            // Handle subscription limit reached - BUT Continue to show places (Normal search is free)
+            if (res.status === 402 || data.code === 'LIMIT_REACHED' || (data.usage && data.usage.limitReached)) {
                 setLimitReached(true);
                 setRemainingScans(0);
-                toast.error("Monthly search limit reached. Upgrade to Premium!");
-                return;
+                // Don't error, just notify about AI features
+                if (!limitReached) {
+                    toast("AI limits reached. Showing standard results.", { icon: "ℹ️" });
+                }
+                // allow execution to proceed to setPlaces
+            } else {
+                setLimitReached(false); // Reset if not reached
             }
 
             // Handle auth errors
@@ -205,7 +249,7 @@ export default function SearchPage() {
             if (data.usage) {
                 setRemainingScans(data.usage.remaining);
                 setSubscriptionTier(data.usage.tier);
-                if (data.usage.remaining === 0 && data.usage.tier === 'free') {
+                if ((data.usage.remaining === 0 && data.usage.tier === 'free') || data.usage.limitReached) {
                     setLimitReached(true);
                 }
             }
@@ -213,12 +257,19 @@ export default function SearchPage() {
             if (data.results) {
                 setPlaces(data.results);
                 // Fit bounds if we have results
+                // Fit bounds if we have results
                 if (mapInstance && data.results.length > 0) {
                     const bounds = new google.maps.LatLngBounds();
+                    let hasValidBounds = false;
                     data.results.forEach((p: Place) => {
-                        bounds.extend(p.geometry.location);
+                        if (p.geometry && p.geometry.location) {
+                            bounds.extend(p.geometry.location);
+                            hasValidBounds = true;
+                        }
                     });
-                    mapInstance.fitBounds(bounds);
+                    if (hasValidBounds) {
+                        mapInstance.fitBounds(bounds);
+                    }
                 }
             } else if (data.status === 'ZERO_RESULTS') {
                 toast("No places found nearby", { icon: "🔍" });
@@ -311,24 +362,8 @@ export default function SearchPage() {
         }
     }, [places, limitReached, preferences, autoScorePlaces]);
 
-    // Sync local state to React Query cache for persistence across navigation
-    useEffect(() => {
-        if (places.length > 0 && hasRestored.current) {
-            cacheSetPlaces(places, scores);
-        }
-    }, [places, scores, cacheSetPlaces]);
-
-    useEffect(() => {
-        if (selectedCategory && hasRestored.current) {
-            cacheSetCategory(selectedCategory);
-        }
-    }, [selectedCategory, cacheSetCategory]);
-
-    useEffect(() => {
-        if (center && hasRestored.current) {
-            cacheSetLocation({ lat: center.lat, lng: center.lng, cityId: cityId || undefined });
-        }
-    }, [center, cityId, cacheSetLocation]);
+    // URL State sync is now handled by the main useEffect at the top.
+    // Legacy cache sync effects removed to prevent conflicts and lint errors.
 
     // Update map markers when places change - using AdvancedMarkerElement
     useEffect(() => {
@@ -357,6 +392,8 @@ export default function SearchPage() {
                         scale: 1.0,
                     });
 
+                    if (!place.geometry || !place.geometry.location) return null;
+
                     const marker = new AdvancedMarkerElement({
                         position: place.geometry.location,
                         map: mapInstance,
@@ -380,7 +417,13 @@ export default function SearchPage() {
 
     const handleSearch = (e: React.FormEvent) => {
         e.preventDefault();
-        fetchPlaces(undefined, searchQuery);
+        const params = new URLSearchParams(searchParams.toString());
+        if (searchQuery) {
+            params.set("q", searchQuery);
+        } else {
+            params.delete("q");
+        }
+        router.push(`/search?${params.toString()}`);
     };
 
     /**
@@ -394,12 +437,11 @@ export default function SearchPage() {
             return;
         }
 
-        // Wrap geolocation in a promise for cleaner async handling
         const getDeviceLocation = (): Promise<{ lat: number; lng: number }> => {
             return new Promise((resolve, reject) => {
                 const timeoutId = setTimeout(() => {
                     reject(new Error('timeout'));
-                }, 10000);
+                }, 15000); // Increased timeout to 15s
 
                 navigator.geolocation.getCurrentPosition(
                     (position) => {
@@ -415,7 +457,7 @@ export default function SearchPage() {
                     },
                     {
                         enableHighAccuracy: true,
-                        timeout: 10000,
+                        timeout: 15000,
                         maximumAge: 60000
                     }
                 );
@@ -424,61 +466,78 @@ export default function SearchPage() {
 
         try {
             const location = await getDeviceLocation();
-            setUserLocation(location); // Set Blue Dot
+
+            // Success - Update URL
+            const params = new URLSearchParams(searchParams.toString());
+            params.set("lat", location.lat.toString());
+            params.set("lng", location.lng.toString());
+
+            // Only fetch if we really need to, but router push will trigger the useEffect
+            router.push(`/search?${params.toString()}`);
+            toast.success("Location detected!");
+
+            // UI Feedback immediately
+            setUserLocation(location);
             setCenter(location);
             mapInstance?.setCenter(location);
             mapInstance?.setZoom(14);
-            toast.success("Location detected!");
-            fetchPlaces(location);
+
         } catch (error) {
             if ((error as GeolocationPositionError).code === 1 || (error as GeolocationPositionError).code === 2) {
                 console.warn("Geolocation unavailable or denied");
             } else {
                 console.error("Geolocation error:", error);
             }
-            // On GPS failure, mark as attempted and show LocationModal
+            toast.error("Nepodarilo sa získať polohu. Prosím, zadajte ju manuálne.");
+            // on failing, keep current location or default
             setGpsAttempted(true);
             setLocationModalOpen(true);
         }
-    }, [mapInstance, fetchPlaces]);
+    }, [mapInstance, searchParams, router]);
 
     /**
      * Handle location selection from LocationModal
-     * NOTE: This ONLY updates location state. User must explicitly click a category or search to fetch places.
      */
     const handleLocationSelect = useCallback((location: { lat: number; lng: number; name: string; placeId?: string }) => {
+        // Update URL
+        const params = new URLSearchParams(searchParams.toString());
+        params.set("lat", location.lat.toString());
+        params.set("lng", location.lng.toString());
+
+        router.push(`/search?${params.toString()}`);
+
+        // Immediate UI feedback
         setCenter(location);
         if (location.placeId) setCityId(location.placeId);
-
-        // Don't set userLocation (Blue Dot) for manually selected cities
         mapInstance?.setCenter(location);
         mapInstance?.setZoom(13);
 
-        // Clear previous results when changing location
-        setPlaces([]);
-        setScores({});
-        setSelectedCategory(null);
+        // Clear previous results/query if moving drastically? Maybe keep query?
+        // User requested: "Stav ... ukladal do URL". Removing query might be annoying.
+        // We will keep 'q' if it exists.
 
-        // Guide user to select a category - DON'T auto-fetch places
-        toast.success(`📍 Location set to ${location.name}. Now select a category to search!`);
-    }, [mapInstance]);
+        toast.success(`📍 Location set to ${location.name}.`);
+    }, [mapInstance, searchParams, router]);
 
     /**
-     * Auto-initialize: detect location on page load (WITHOUT auto-fetching places).
-     * Runs once when map AND user auth are ready.
+     * Auto-initialize: detect location on page load.
+     * Only runs if NO location params exist in URL.
      */
     useEffect(() => {
         if (mapInstance && user && !hasAutoInitialized.current) {
             hasAutoInitialized.current = true;
-            console.log('[SearchPage] Auto-initializing location detection (without auto-fetch)...');
-            // Only detect location, don't fetch places automatically
-            handleDetectLocationOnly();
+
+            const hasLocationParams = searchParams.has("lat") && searchParams.has("lng");
+            if (!hasLocationParams) {
+                console.log('[SearchPage] Auto-initializing location detection...');
+                handleDetectLocationOnly();
+            }
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [mapInstance, user]);
+    }, [mapInstance, user, searchParams]);
 
     /**
-     * Detect location only - sets center and userLocation without fetching places
+     * Detect location only - updates URL
      */
     const handleDetectLocationOnly = useCallback(async () => {
         if (!navigator.geolocation) {
@@ -488,7 +547,7 @@ export default function SearchPage() {
 
         try {
             const location = await new Promise<{ lat: number; lng: number }>((resolve, reject) => {
-                const timeoutId = setTimeout(() => reject(new Error('timeout')), 10000);
+                const timeoutId = setTimeout(() => reject(new Error('timeout')), 15000); // 15s
                 navigator.geolocation.getCurrentPosition(
                     (position) => {
                         clearTimeout(timeoutId);
@@ -498,25 +557,26 @@ export default function SearchPage() {
                         clearTimeout(timeoutId);
                         reject(error);
                     },
-                    { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+                    { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
                 );
             });
+
+            const params = new URLSearchParams(searchParams.toString());
+            params.set("lat", location.lat.toString());
+            params.set("lng", location.lng.toString());
+            router.replace(`/search?${params.toString()}`);
+
+            toast.success("Location detected!");
 
             setUserLocation(location);
             setCenter(location);
             mapInstance?.setCenter(location);
-            mapInstance?.setZoom(14);
-            toast.success("Location detected! Select a category to search.");
         } catch (error) {
-            if ((error as GeolocationPositionError).code === 1 || (error as GeolocationPositionError).code === 2) {
-                console.warn("Geolocation unavailable or denied (auto-detect)");
-            } else {
-                console.error("Geolocation error:", error);
-            }
+            console.warn("Auto-detect failed:", error);
+            // Silent fail or minimal UI update on auto-detect
             setGpsAttempted(true);
-            setLocationModalOpen(true);
         }
-    }, [mapInstance]);
+    }, [mapInstance, searchParams, router]);
 
     /**
      * Handle category button click - fetch places with keyword
@@ -530,33 +590,13 @@ export default function SearchPage() {
     return (
         <ProtectedRoute>
             <RoleGuard allowedRole="diner">
-                <div className="flex flex-col h-screen max-h-screen">
-                    {/* Header */}
-                    <header className="h-16 border-b flex items-center px-4 gap-4 bg-background z-10 shrink-0">
-                        <div className="font-bold text-xl tracking-tight hidden md:block text-primary">NearSpotty</div>
-                        <form onSubmit={handleSearch} className="flex-1 max-w-xl flex gap-2">
-                            <div className="relative flex-1">
-                                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                                <Input
-                                    placeholder="Restaurants, cafes, vegan..."
-                                    className="pl-9 bg-gray-50 dark:bg-gray-800 border-none"
-                                    value={searchQuery}
-                                    onChange={(e) => setSearchQuery(e.target.value)}
-                                />
-                            </div>
-                            <Button type="submit" size="icon" variant="ghost" disabled={loading}>
-                                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-                            </Button>
-                        </form>
-                        <Button variant="outline" size="sm" className="hidden sm:flex" onClick={handleUseLocation}>
-                            <MapPin className="mr-2 h-4 w-4" /> Use my location
-                        </Button>
-                    </header>
+                <div className="flex flex-col h-[calc(100vh-4rem)] max-h-[calc(100vh-4rem)] relative">
+                    {/* Header Removed (Consolidated in Global Navbar) */}
 
                     {/* Main Content: Split Map/List */}
                     <div className="flex-1 flex overflow-hidden relative">
-                        {/* List View */}
-                        <div data-results-container className="w-full md:w-[400px] lg:w-[450px] border-r bg-background overflow-y-auto flex flex-col p-4 gap-4 shrink-0 z-10 shadow-xl md:shadow-none absolute md:relative bottom-0 h-1/2 md:h-full rounded-t-2xl md:rounded-none bg-white/90 backdrop-blur-sm md:bg-background">
+                        {/* List View - Desktop Only */}
+                        <div data-results-container className="hidden md:flex w-[400px] lg:w-[450px] border-r bg-background overflow-y-auto flex-col p-4 gap-4 shrink-0 z-10 shadow-none h-full bg-background">
                             <div className="flex justify-between items-center pb-2 sticky top-0 bg-inherit z-20">
                                 <h2 className="font-semibold text-lg">Results</h2>
                                 <div className="flex items-center gap-2">
@@ -659,13 +699,17 @@ export default function SearchPage() {
 
                             {loading && (
                                 <div className="space-y-4">
+                                    <div className="flex items-center gap-2 text-primary animate-pulse py-2">
+                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                        <span className="text-sm font-medium">Deep Searching & AI Analysis...</span>
+                                    </div>
                                     {[1, 2, 3, 4].map((i) => (
                                         <PlaceCardSkeleton key={i} />
                                     ))}
                                 </div>
                             )}
 
-                            <div className="space-y-4 pb-20 md:pb-0">
+                            <div className="space-y-4 md:pb-0">
                                 {places.map((place) => (
                                     <div key={place.place_id} id={`place-${place.place_id}`} className={`transition-all duration-300 rounded-lg ${selectedPlaceId === place.place_id ? 'ring-2 ring-primary shadow-lg scale-[1.02]' : ''}`}>
                                         <PlaceCard
@@ -675,7 +719,6 @@ export default function SearchPage() {
                                             scoringLoading={scoringLoading}
                                             limitReached={limitReached}
                                             onBeforeNavigate={() => {
-                                                // Save scroll position to cache before navigating
                                                 const container = document.querySelector('[data-results-container]');
                                                 if (container) {
                                                     saveScrollPosition(container.scrollTop);
@@ -685,6 +728,7 @@ export default function SearchPage() {
                                                 setSelectedPlaceId(place.place_id);
                                                 mapInstance?.panTo(place.geometry.location);
                                             }}
+                                            userLocation={userLocation ?? undefined}
                                         />
                                     </div>
                                 ))}
@@ -694,12 +738,39 @@ export default function SearchPage() {
                         {/* Map View */}
                         <div className="flex-1 bg-gray-100 relative h-full">
                             <Map
-                                className="absolute inset-0"
+                                className="absolute inset-0 z-0"
                                 onLoad={setMapInstance}
                                 initialCenter={center}
                                 userLocation={userLocation}
                             />
                         </div>
+
+                        {/* Mobile Search Component */}
+                        <MobileSearch
+                            places={places}
+                            loading={loading}
+                            scoringLoading={scoringLoading}
+                            searchQuery={searchQuery}
+                            setSearchQuery={setSearchQuery}
+                            onSearch={handleSearch}
+                            onCategorySelect={handleCategorySearch}
+                            selectedCategory={selectedCategory}
+                            scores={scores}
+                            preferences={preferences}
+                            limitReached={limitReached}
+                            remainingScans={remainingScans}
+                            subscriptionTier={subscriptionTier}
+                            onUseLocation={handleUseLocation}
+                            userLocation={userLocation}
+                            onPlaceSelect={(id: string) => {
+                                setSelectedPlaceId(id);
+                                const place = places.find(p => p.place_id === id);
+                                if (place && mapInstance) {
+                                    mapInstance.panTo(place.geometry.location);
+                                    mapInstance.setZoom(16);
+                                }
+                            }}
+                        />
                     </div>
 
                     {/* Location Modal */}
@@ -710,8 +781,9 @@ export default function SearchPage() {
                         onRetryGPS={handleUseLocation}
                         hideGPSRetry={gpsAttempted}
                     />
+
                 </div>
             </RoleGuard>
-        </ProtectedRoute>
+        </ProtectedRoute >
     );
 }

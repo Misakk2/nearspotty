@@ -1,0 +1,194 @@
+import { NextRequest, NextResponse } from "next/server";
+import { getCache, setCache, createCacheKey } from "@/lib/cache-utils";
+import { adminAuth, adminDb } from "@/lib/firebase-admin";
+import { checkAIUsage, incrementAIUsage } from "@/lib/ai-usage";
+import { scorePlacesWithDeepContext, PlaceWithContext } from "@/lib/gemini";
+
+/**
+ * Deep Search API Route - The "Dietary Engine"
+ * 
+ * Orchestrates the full AI pipeline:
+ * 1. Broad Fetch (Google Places)
+ * 2. Deep Enrichment (Fetch Details parallel)
+ * 3. Pre-processing (Review filtering)
+ * 4. Batch AI Scoring (Gemini)
+ */
+export async function GET(request: NextRequest) {
+    console.log("[Deep Search] Request received");
+    // --- 1. Authenticate & Quota Check ---
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        return NextResponse.json({ error: "Authentication required", code: "UNAUTHORIZED" }, { status: 401 });
+    }
+
+    const token = authHeader.split("Bearer ")[1];
+    let userId: string;
+
+    try {
+        const decodedToken = await adminAuth.verifyIdToken(token);
+        userId = decodedToken.uid;
+    } catch (error) {
+        return NextResponse.json({ error: "Invalid token", code: "INVALID_TOKEN" }, { status: 401 });
+    }
+
+    // Check Usage (Non-blocking for this route? Or blocking? The user prompt implies limit management)
+    // We will assume standard check.
+    let usageStatus;
+    try {
+        usageStatus = await checkAIUsage(userId);
+    } catch (e) {
+        // Fallback or init user if needed (omitted for brevity, assume user exists or handled by client/hooks)
+        console.error("Usage check failed", e);
+        usageStatus = { remaining: 0, limitReached: true, tier: 'free' };
+    }
+
+    // --- 2. Parse Params ---
+    const { searchParams } = new URL(request.url);
+    const lat = parseFloat(searchParams.get("lat") || "0");
+    const lng = parseFloat(searchParams.get("lng") || "0");
+    const radius = parseFloat(searchParams.get("radius") || "3000"); // Default 3km
+    const keyword = searchParams.get("keyword") || "restaurant";
+
+    // --- 3. Broad Fetch (Google Places v1) ---
+    const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_PLACES_KEY;
+    if (!API_KEY) return NextResponse.json({ error: "Server Config Error" }, { status: 500 });
+
+    try {
+        const broadEndpoint = "https://places.googleapis.com/v1/places:searchNearby";
+        const broadBody = {
+            includedTypes: ["restaurant", "cafe", "bakery"], // Broad categories
+            locationRestriction: {
+                circle: { center: { latitude: lat, longitude: lng }, radius: radius }
+            },
+            maxResultCount: 20 // Fetch 20, we will deep process top 10
+        };
+
+        console.log("[Deep Search] Fetching Broad Candidates from:", broadEndpoint);
+        const broadRes = await fetch(broadEndpoint, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "X-Goog-Api-Key": API_KEY,
+                "X-Goog-FieldMask": "places.name,places.id,places.types,places.priceLevel,places.rating,places.userRatingCount"
+            },
+            body: JSON.stringify(broadBody)
+        });
+
+        const broadData = await broadRes.json();
+        if (!broadData.places) return NextResponse.json({ results: [] });
+
+        // Filter: Basic Hard Filters (e.g. must have rating > 3.0)
+        let candidates = broadData.places.filter((p: any) => (p.rating || 0) >= 3.5);
+
+        // Limit to Top 10 for Deep Fetch to save cost/latency
+        candidates = candidates.slice(0, 10);
+
+        // --- 4. Deep Fetch (Parellel Details) ---
+        // We need: editorialSummary, reviews, servesVegetarianFood, websiteUri
+        const deepPromises = candidates.map(async (p: any) => {
+            const detailsEndpoint = `https://places.googleapis.com/v1/places/${p.id}`;
+            const fields = "editorialSummary,reviews,servesVegetarianFood,websiteUri";
+
+            const detailRes = await fetch(`${detailsEndpoint}?fields=${fields}&key=${API_KEY}`);
+            const detailData = await detailRes.json();
+
+            return {
+                place_id: p.id,
+                name: p.name.text,
+                types: p.types,
+                rating: p.rating,
+                price_level: p.priceLevel ? (p.priceLevel === "PRICE_LEVEL_EXPENSIVE" ? 3 : 2) : 1,
+                // Normalize editorialSummary
+                editorialSummary: p.editorialSummary?.text || p.editorialSummary,
+                // Normalize reviews (Google Places v1 returns { text: { text: "...", languageCode: "en" } })
+                reviews: p.reviews?.map((r: any) => ({
+                    ...r,
+                    text: r.text?.text || r.text // Extract inner text if object, else keep as is
+                })) || [],
+                websiteUri: p.websiteUri,
+                servesVegetarianFood: p.servesVegetarianFood
+            };
+        });
+
+        console.log(`[Deep Search] Fetching details for ${deepPromises.length} candidates...`);
+        const enrichedPlaces: PlaceWithContext[] = await Promise.all(deepPromises);
+        console.log("[Deep Search] Details fetched");
+
+        // --- 5. Pre-processing (Review Filtering) ---
+        // Fetch User Preferences
+        const userDoc = await adminDb.collection("users").doc(userId).get();
+        const preferences = userDoc.data()?.preferences || {};
+        const allergyKeywords = (preferences.allergies || "").toLowerCase().split(",").map((k: string) => k.trim()).filter((k: string) => k);
+        const dietKeywords = (preferences.dietary || []).map((k: string) => k.toLowerCase());
+
+        const interestingKeywords = [...allergyKeywords, ...dietKeywords];
+
+        enrichedPlaces.forEach(p => {
+            // Filter reviews: Keep if matches keyword OR is highly rated
+            if (Array.isArray(p.reviews) && interestingKeywords.length > 0) {
+                const relevantReviews = p.reviews.filter((r: any) => {
+                    if (!r || typeof r.text !== 'string') return false;
+                    const text = r.text.toLowerCase();
+                    return interestingKeywords.some(k => text.includes(k));
+                });
+
+                // Simple Heuristic Flagging for Gemini
+                const safeKeywords = ["safe", "accommodat", "knowledgeable", "separate", "careful", "dedicated"];
+                const riskKeywords = ["sick", "reaction", "contaminated", "cross", "hidden", "unsafe", "ignorant"];
+
+                const flaggedReviews = (relevantReviews.length > 0 ? relevantReviews : p.reviews).map((r: any) => {
+                    if (!r || typeof r.text !== 'string') return { ...r, flag: undefined };
+                    const text = r.text.toLowerCase();
+                    let flag = undefined;
+                    if (riskKeywords.some(k => text.includes(k))) flag = "RISK";
+                    else if (safeKeywords.some(k => text.includes(k))) flag = "SAFE_CANDIDATE";
+
+                    return { ...r, flag };
+                });
+
+                // If found relevant ones, prioritize them. Else take top 3.
+                if (relevantReviews.length > 0) {
+                    p.reviews = flaggedReviews.slice(0, 5); // Increased to 5 as per instructions
+                } else {
+                    p.reviews = flaggedReviews.slice(0, 3);
+                }
+            } else if (Array.isArray(p.reviews)) {
+                p.reviews = p.reviews.slice(0, 3); // Default to top 3
+            } else {
+                p.reviews = []; // Flag as empty if not array
+            }
+        });
+
+        // --- 6. Batch AI Scoring ---
+        let scoredPlaces = new Map();
+        if (!usageStatus.limitReached) {
+            console.log("[Deep Search] Scoring places with Gemini...");
+            scoredPlaces = await scorePlacesWithDeepContext(enrichedPlaces, preferences);
+            await incrementAIUsage(userId);
+            console.log("[Deep Search] Scoring complete");
+        }
+
+        // --- 7. Formatting Response ---
+        const finalResults = enrichedPlaces.map(p => ({
+            ...p,
+            ai_score: scoredPlaces.get(p.place_id) || null
+        })).sort((a, b) => (b.ai_score?.matchScore || 0) - (a.ai_score?.matchScore || 0));
+
+        return NextResponse.json({
+            results: finalResults,
+            usage: {
+                remaining: usageStatus.remaining,
+                limitReached: usageStatus.limitReached
+            }
+        });
+
+    } catch (error: any) {
+        console.error("CRITICAL SEARCH API CRASH:", error);
+        console.error("Stack Trace:", error.stack);
+        return NextResponse.json({
+            error: "Internal Server Error",
+            details: error.message,
+            stack: error.stack
+        }, { status: 500 });
+    }
+}

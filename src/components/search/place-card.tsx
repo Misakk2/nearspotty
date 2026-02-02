@@ -14,6 +14,8 @@ export interface PlaceCardProps {
     score?: GeminiScore | null; // Score from batch-scoring
     scoringLoading?: boolean;
     limitReached?: boolean;
+    isMobile?: boolean;
+    userLocation?: { lat: number; lng: number };
 }
 
 export default function PlaceCard({
@@ -22,12 +24,35 @@ export default function PlaceCard({
     onBeforeNavigate,
     score,
     scoringLoading = false,
-    limitReached = false
+    limitReached = false,
+    isMobile,
+    userLocation
 }: PlaceCardProps) {
 
     const photoUrl = place.photos?.[0]?.photo_reference
         ? `https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photoreference=${place.photos[0].photo_reference}&key=${process.env.NEXT_PUBLIC_GOOGLE_PLACES_KEY}`
         : "/placeholder-restaurant.jpg";
+
+    const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+        const R = 6371; // Radius of the earth in km
+        const dLat = deg2rad(lat2 - lat1);
+        const dLon = deg2rad(lon2 - lon1);
+        const a =
+            Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        const d = R * c; // Distance in km
+        return d.toFixed(1);
+    };
+
+    const deg2rad = (deg: number) => {
+        return deg * (Math.PI / 180);
+    };
+
+    const distance = userLocation && place.geometry?.location
+        ? calculateDistance(userLocation.lat, userLocation.lng, place.geometry.location.lat, place.geometry.location.lng)
+        : null;
 
     const handleClick = (e: React.MouseEvent) => {
         // Save scroll position before navigation
@@ -42,11 +67,11 @@ export default function PlaceCard({
     return (
         <Link href={`/place/${place.place_id}`} className="block" onClick={handleClick}>
             <Card
-                className="hover:shadow-md transition-shadow cursor-pointer overflow-hidden border-none shadow-sm bg-card group"
+                className={`hover:shadow-md transition-shadow cursor-pointer overflow-hidden border-none shadow-sm bg-card group ${isMobile ? 'flex flex-row h-32' : 'flex flex-col'}`}
             >
                 <div className="flex flex-row md:flex-col h-32 md:h-auto">
                     {/* Image */}
-                    <div className="w-32 md:w-full h-full md:h-40 shrink-0 bg-gray-200 relative">
+                    <div className={`w-32 md:w-full h-full md:h-40 shrink-0 bg-gray-200 relative ${isMobile ? 'w-32 h-32' : ''}`}>
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img src={photoUrl} alt={place.name} className="w-full h-full object-cover" />
 
@@ -129,7 +154,8 @@ export default function PlaceCard({
 
                             <div className="flex items-center text-xs text-muted-foreground mt-1 line-clamp-1">
                                 <MapPin className="h-3 w-3 mr-1 shrink-0" />
-                                {place.vicinity}
+                                <span className="truncate">{place.vicinity}</span>
+                                {distance && <span className="ml-1 font-medium text-primary">• {distance} km</span>}
                             </div>
                         </div>
 

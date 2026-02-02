@@ -6,6 +6,12 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
     apiVersion: "2026-01-28.clover",
 });
 
+function toSafeISOString(timestamp: number | null | undefined): string {
+    if (!timestamp) return new Date().toISOString();
+    const date = new Date(timestamp * 1000);
+    return !isNaN(date.getTime()) ? date.toISOString() : new Date().toISOString();
+}
+
 /**
  * Subscription Cancel API
  * 
@@ -84,9 +90,9 @@ export async function POST(request: NextRequest) {
         };
 
         const cancelAt = subData.cancel_at
-            ? new Date(subData.cancel_at * 1000).toISOString()
+            ? toSafeISOString(subData.cancel_at)
             : null;
-        const currentPeriodEnd = new Date(subData.current_period_end * 1000).toISOString();
+        const currentPeriodEnd = toSafeISOString(subData.current_period_end);
 
         // --- 5. Update Firestore ---
         await adminDb.collection("users").doc(userId).update({

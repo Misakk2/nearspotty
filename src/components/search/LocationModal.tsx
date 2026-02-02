@@ -97,16 +97,20 @@ export default function LocationModal({
                 const cached = await getCitySuggestionsFromCache(query, 5);
                 if (cached.length > 0) {
                     setCachedResults(cached);
-                    setSuggestions([]); // Clear Google results when we have cache
-                    setLoading(false);
-                    console.log("[LocationModal] Found cached cities:", cached.length);
-                    return;
+                    // Even if we have cache, we might want to fetch more if cache is small?
+                    // For now, if we have cache, we trust it to save money.
+                    if (cached.length >= 3) {
+                        setSuggestions([]); // Clear Google results when we have good cache
+                        setLoading(false);
+                        console.log("[LocationModal] Found cached cities:", cached.length);
+                        return;
+                    }
                 }
             } catch (cacheError) {
                 console.error("[LocationModal] Cache lookup failed:", cacheError);
             }
 
-            // STEP 2: Fall back to Google Places API using new AutocompleteSuggestion API
+            // STEP 2: Fall back to Google Places API
             if (placesReady) {
                 try {
                     const request: google.maps.places.AutocompleteRequest = {
@@ -117,7 +121,6 @@ export default function LocationModal({
 
                     const { suggestions: autoSuggestions } = await google.maps.places.AutocompleteSuggestion.fetchAutocompleteSuggestions(request);
 
-                    setCachedResults([]); // Clear cache results
                     const mappedSuggestions: PlaceSuggestion[] = autoSuggestions
                         .filter(s => s.placePrediction)
                         .map(s => ({
@@ -128,6 +131,47 @@ export default function LocationModal({
                         }));
 
                     setSuggestions(mappedSuggestions);
+
+                    // STEP 3: Aggressively Cache ALL Suggestions (Background Process)
+                    // We fetch details for ALL suggestions to populate our DB
+                    // This costs more now but saves significantly later.
+                    (async () => {
+                        for (const suggestion of mappedSuggestions) {
+                            try {
+                                // Check if already in cache (client-side check against cachedResults not sufficient, need DB check inside save or just try save)
+                                // But we need lat/lng.
+                                const place = new google.maps.places.Place({
+                                    id: suggestion.placeId,
+                                });
+
+                                // Fetch only necessary fields
+                                await place.fetchFields({
+                                    fields: ["location", "displayName", "addressComponents"],
+                                });
+
+                                if (place.location) {
+                                    const cityName = suggestion.mainText || place.displayName || "Unknown";
+                                    const fullName = suggestion.fullText || cityName;
+
+                                    const countryComponent = place.addressComponents?.find(
+                                        comp => comp.types.includes("country")
+                                    );
+
+                                    await saveCityToCache({
+                                        name: cityName,
+                                        fullName,
+                                        lat: place.location.lat(),
+                                        lng: place.location.lng(),
+                                        country: countryComponent?.longText || undefined,
+                                        placeId: suggestion.placeId,
+                                    });
+                                }
+                            } catch (err) {
+                                console.error("Background caching failed for:", suggestion.mainText, err);
+                            }
+                        }
+                    })();
+
                 } catch (error) {
                     console.error("[LocationModal] AutocompleteSuggestion error:", error);
                     setSuggestions([]);

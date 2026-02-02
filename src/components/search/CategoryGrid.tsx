@@ -31,7 +31,7 @@ export default function CategoryGrid({
 
     return (
         <div className="w-full">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="flex flex-col gap-3">
                 {APP_CATEGORIES.map((category) => {
                     const Icon = category.icon;
                     const isActive = activeCategory === category.id;
@@ -41,32 +41,33 @@ export default function CategoryGrid({
                             key={category.id}
                             onClick={() => !disabled && onSelectCategory(category.id)}
                             className={cn(
-                                "group relative flex flex-col items-center justify-center p-8 rounded-2xl cursor-pointer transition-all duration-300",
-                                "bg-white border hover:shadow-xl hover:-translate-y-1",
+                                "group relative flex items-center p-3 rounded-xl cursor-pointer transition-all duration-300",
+                                "w-full bg-white border",
+                                "hover:shadow-md hover:border-primary/50",
                                 isActive
-                                    ? "border-primary ring-2 ring-primary/20 shadow-lg"
-                                    : "border-gray-100 hover:border-primary/30",
-                                disabled && "opacity-50 grayscale cursor-not-allowed hover:transform-none hover:shadow-none"
+                                    ? "border-primary ring-1 ring-primary shadow-sm bg-primary/5"
+                                    : "border-gray-100",
+                                disabled && "opacity-50 grayscale cursor-not-allowed hover:shadow-none hover:border-gray-100"
                             )}
                         >
                             <div className={cn(
-                                "p-4 rounded-full mb-4 transition-colors duration-300",
-                                isActive ? "bg-primary text-white" : "bg-primary/5 text-primary group-hover:bg-primary group-hover:text-white"
+                                "p-2 rounded-lg mr-4 transition-colors duration-300",
+                                isActive ? "bg-primary text-white" : "bg-gray-100 text-gray-500 group-hover:bg-primary group-hover:text-white"
                             )}>
-                                <Icon className="w-8 h-8" />
+                                <Icon className="w-5 h-5" />
                             </div>
 
-                            <h3 className="text-xl font-bold text-gray-900 group-hover:text-primary transition-colors">
-                                {category.label}
-                            </h3>
+                            <div className="flex-1 text-left">
+                                <h3 className={cn(
+                                    "text-sm font-semibold transition-colors",
+                                    isActive ? "text-primary" : "text-gray-700 group-hover:text-gray-900"
+                                )}>
+                                    {category.label}
+                                </h3>
+                            </div>
 
-                            <p className="text-sm text-gray-500 mt-2 text-center group-hover:text-gray-700 transition-colors">
-                                {category.description}
-                            </p>
-
-                            {/* Active Indicator Dot */}
                             {isActive && (
-                                <div className="absolute top-4 right-4 w-2 h-2 rounded-full bg-primary" />
+                                <div className="w-1.5 h-1.5 rounded-full bg-primary ml-2" />
                             )}
                         </div>
                     );

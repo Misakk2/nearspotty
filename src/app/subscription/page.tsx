@@ -5,7 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter }
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { Check, Sparkles, Zap, Shield, Star, Loader2, Crown, AlertCircle, Calendar } from "lucide-react";
+import { Check, Sparkles, Zap, Shield, Star, Loader2, Crown, AlertCircle, Calendar, ChevronLeft } from "lucide-react";
+import Link from "next/link";
 import { useAuth } from "@/components/auth-provider";
 import ProtectedRoute from "@/components/protected-route";
 import toast, { Toaster } from "react-hot-toast";
@@ -172,7 +173,15 @@ export default function SubscriptionPage() {
         <ProtectedRoute>
             <div className="min-h-screen bg-gray-50 py-12 px-4">
                 <Toaster position="top-center" />
-                <div className="max-w-4xl mx-auto space-y-8">
+                <div className="max-w-4xl mx-auto space-y-8 relative">
+                    {/* Mobile Back Button */}
+                    <div className="md:hidden absolute -top-10 left-0">
+                        <Link href="/search">
+                            <Button variant="ghost" size="sm" className="gap-1 pl-0 text-muted-foreground">
+                                <ChevronLeft className="h-4 w-4" /> Back
+                            </Button>
+                        </Link>
+                    </div>
 
                     {/* User Identity & Status Card */}
                     <Card className="border-2">

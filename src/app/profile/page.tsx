@@ -13,7 +13,7 @@ import { useAuth } from "@/components/auth-provider";
 import ProtectedRoute from "@/components/protected-route";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Calendar, CreditCard, LogOut, LayoutDashboard } from "lucide-react";
+import { Calendar, CreditCard, LogOut, LayoutDashboard, ChevronLeft } from "lucide-react";
 
 const DIETARY_OPTIONS = [
     { id: "vegan", label: "Vegan" },
@@ -88,7 +88,14 @@ export default function ProfilePage() {
             <div className="container mx-auto py-10 px-4 min-h-screen">
                 <div className="max-w-2xl mx-auto space-y-8">
                     <Card>
-                        <CardHeader>
+                        <CardHeader className="relative">
+                            <div className="absolute top-4 left-4 md:hidden">
+                                <Link href="/search">
+                                    <Button variant="ghost" size="icon" className="h-8 w-8">
+                                        <ChevronLeft className="h-5 w-5" />
+                                    </Button>
+                                </Link>
+                            </div>
                             <CardTitle>Personal Information</CardTitle>
                         </CardHeader>
                         <CardContent>

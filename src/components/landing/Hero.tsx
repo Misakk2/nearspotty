@@ -82,16 +82,16 @@ export const Hero = ({
                 </div>
 
                 {/* Mockup Placeholder */}
-                <motion.div
+                {/*  <motion.div
                     className="mt-16 relative max-w-5xl mx-auto"
                     initial={{ opacity: 0, y: 40 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.8, delay: 0.4 }}
                 >
                     <div className="aspect-[16/9] rounded-3xl bg-gradient-to-tr from-gray-100 to-gray-50 border p-2 shadow-2xl">
-                        <div className="w-full h-full rounded-2xl bg-white overflow-hidden relative">
-                            {/* Simplified App Mockup */}
-                            <div className="absolute inset-0 flex items-center justify-center">
+                        <div className="w-full h-full rounded-2xl bg-white overflow-hidden relative"> */}
+                {/* Simplified App Mockup */}
+                {/* <div className="absolute inset-0 flex items-center justify-center">
                                 <div className="w-64 h-[400px] border-8 border-gray-900 rounded-[3rem] shadow-2xl overflow-hidden bg-gray-50 relative">
                                     <div className="p-4 space-y-4">
                                         <div className="h-4 w-2/3 bg-gray-200 rounded animate-pulse" />
@@ -120,7 +120,7 @@ export const Hero = ({
                             </div>
                         </div>
                     </div>
-                </motion.div>
+                </motion.div> */}
             </div>
         </section>
     );

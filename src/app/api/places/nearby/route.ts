@@ -37,13 +37,13 @@ export async function GET(request: NextRequest) {
         );
     }
 
-    // --- 2. Check Subscription Limits & Initialize User if Missing ---
+    // --- 2. Check Subscription Limits for Frontend Display (Non-blocking) ---
     let usageStatus;
     try {
         usageStatus = await checkAIUsage(userId);
     } catch (error) {
         console.log("User document likely missing, initializing...", error);
-        // Initialize user doc if missing (Fix for 401/500 errors on new users)
+        // Initialize user doc if missing
         await adminAuth.updateUser(userId, { emailVerified: true }).catch(() => { });
         await adminDb.collection("users").doc(userId).set({
             email: decodedToken.email || "",
@@ -59,23 +59,12 @@ export async function GET(request: NextRequest) {
             aiUsage: { count: 0, resetDate: new Date().toISOString() }
         }, { merge: true });
 
-        // Retry check
         usageStatus = await checkAIUsage(userId);
     }
 
-    if (usageStatus.limitReached) {
-        return NextResponse.json(
-            {
-                error: "Monthly search limit reached",
-                code: "LIMIT_REACHED",
-                tier: usageStatus.tier,
-                count: usageStatus.count,
-                remaining: 0,
-                upgradeUrl: "/pricing"
-            },
-            { status: 402 }
-        );
-    }
+    // NOTE: We DO NOT block search if limit is reached.
+    // Search (Google Places) is "normal search" and should be free for the user (app bears cost).
+    // AI Scoring (Gemini) is the limited feature.
 
     // --- 3. Parse Request Parameters ---
     const { searchParams } = new URL(request.url);
@@ -101,7 +90,6 @@ export async function GET(request: NextRequest) {
     if (cityId) {
         cacheKey = `${cityId}:${categoryKey}`.toLowerCase();
         cacheCollection = "places_cache"; // Global cache
-        // console.log(`[Cache] Checking global cache: ${cacheKey}`);
     } else {
         cacheKey = createCacheKey({ lat, lng, radius, type, keyword });
     }
@@ -109,8 +97,7 @@ export async function GET(request: NextRequest) {
     const cachedData = await getCache(cacheCollection, cacheKey);
 
     if (cachedData) {
-        // console.log(`[Cache] Hit for ${cacheKey}`);
-        // Log search history (async, fire and forget)
+        // Log search history
         adminDb.collection("users").doc(userId).collection("search_history").add({
             query: keyword || type,
             location: { lat, lng, cityId },
@@ -119,31 +106,27 @@ export async function GET(request: NextRequest) {
         });
 
         return NextResponse.json({
-            // @ts-ignore - cachedData is unknown
+            // @ts-ignore
             ...cachedData,
             usage: {
                 remaining: usageStatus.remaining,
-                tier: usageStatus.tier
+                tier: usageStatus.tier,
+                limitReached: usageStatus.limitReached
             }
         });
     }
 
     // --- 5. Build Google Places API Request (New API) ---
-    // Decision: searchText (if keyword) or searchNearby (if location only)
     const isSearchText = !!keyword;
-
-    // API v1 Endpoints
     const endpoint = isSearchText
         ? "https://places.googleapis.com/v1/places:searchText"
         : "https://places.googleapis.com/v1/places:searchNearby";
 
-    // Request Body construction
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const requestBody: any = {};
 
     if (isSearchText) {
         requestBody.textQuery = keyword;
-        // Bias towards location if available
         if (lat && lng) {
             requestBody.locationBias = {
                 circle: {
@@ -153,7 +136,6 @@ export async function GET(request: NextRequest) {
             };
         }
     } else {
-        // searchNearby requires includedTypes
         requestBody.includedTypes = [type];
         requestBody.locationRestriction = {
             circle: {
@@ -164,7 +146,6 @@ export async function GET(request: NextRequest) {
         requestBody.maxResultCount = 20;
     }
 
-    // Field Mask: essential fields only to save bandwidth/cost
     const fieldMask = [
         "places.id",
         "places.displayName",
@@ -196,12 +177,11 @@ export async function GET(request: NextRequest) {
             return NextResponse.json({ error: "Failed to fetch places from Google", details: data.error }, { status: 500 });
         }
 
-        // Map New API response to legacy 'Place' interface
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const places = (data.places || []).map((p: any) => ({
+        let places = (data.places || []).map((p: any) => ({
             place_id: p.id,
             name: p.displayName?.text || "Unknown Place",
-            vicinity: p.formattedAddress, // Fallback for legacy 'vicinity'
+            vicinity: p.formattedAddress,
             formatted_address: p.formattedAddress,
             rating: p.rating,
             user_ratings_total: p.userRatingCount,
@@ -213,7 +193,7 @@ export async function GET(request: NextRequest) {
             },
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             photos: p.photos?.map((photo: any) => ({
-                photo_reference: photo.name, // In v1, photo.name is the resource name (places/ID/photos/ID)
+                photo_reference: photo.name,
                 height: photo.heightPx,
                 width: photo.widthPx
             })),
@@ -221,27 +201,72 @@ export async function GET(request: NextRequest) {
             price_level: mapPriceLevel(p.priceLevel)
         }));
 
-        const resultData = { results: places, status: "OK" };
+        // --- 7. AI Scoring Orchestration ---
+        let aiAnalysisRun = false;
 
-        // Cache successful response (24h)
+        // Only run AI if limit is NOT reached
+        if (!usageStatus.limitReached && places.length > 0) {
+            try {
+                // Fetch full user profile for preferences
+                const userDoc = await adminDb.collection("users").doc(userId).get();
+                const userProfile = userDoc.data()?.preferences || {};
+
+                // Import dynamically to avoid circular deps if any (good practice in Next api routes)
+                const { scorePlacesWithGemini } = await import("@/lib/gemini");
+
+                const scoresMap = await scorePlacesWithGemini(places, userProfile);
+
+                // Merge scores
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                places = places.map((p: any) => ({
+                    ...p,
+                    ai_score: scoresMap.get(p.place_id) || null
+                }));
+
+                // Sort by Match Score
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                places.sort((a: any, b: any) => {
+                    const scoreA = a.ai_score?.matchScore || 0;
+                    const scoreB = b.ai_score?.matchScore || 0;
+                    return scoreB - scoreA;
+                });
+
+                // Increment Usage
+                await incrementAIUsage(userId);
+                aiAnalysisRun = true;
+            } catch (aiError) {
+                console.error("AI Scoring Failed inside Places Route:", aiError);
+                // Fallback: Return unsorted places, do not fail the request
+            }
+        }
+
+        const resultData = {
+            results: places,
+            status: "OK",
+            aiAnalysisRun
+        };
+
         if (places.length > 0) {
-            await setCache(cacheCollection, cacheKey, resultData);
-            await incrementAIUsage(userId);
+            // Cache results (including scores if run)
+            // Sanitize data to remove undefined values (Firestore rejects/NextJS warns)
+            const sanitizedData = JSON.parse(JSON.stringify(resultData));
+            await setCache(cacheCollection, cacheKey, sanitizedData);
 
-            // Log Search History
             adminDb.collection("users").doc(userId).collection("search_history").add({
                 query: keyword || type,
-                location: { lat, lng, cityId },
+                location: { lat, lng, cityId: cityId || null }, // cityId can be undefined
                 timestamp: new Date().toISOString(),
-                source: "google_api_v1"
+                source: "google_api_v1_live",
+                aiScored: aiAnalysisRun
             });
         }
 
         return NextResponse.json({
             ...resultData,
             usage: {
-                remaining: Math.max(0, usageStatus.remaining - 1),
-                tier: usageStatus.tier
+                remaining: aiAnalysisRun ? Math.max(0, usageStatus.remaining - 1) : usageStatus.remaining,
+                tier: usageStatus.tier,
+                limitReached: usageStatus.limitReached
             }
         });
 
@@ -252,13 +277,13 @@ export async function GET(request: NextRequest) {
 }
 
 // Helper to map ENUM price levels to 0-4
-function mapPriceLevel(level: string): number | undefined {
+function mapPriceLevel(level: string): number | null {
     switch (level) {
         case "PRICE_LEVEL_FREE": return 0;
         case "PRICE_LEVEL_INEXPENSIVE": return 1;
         case "PRICE_LEVEL_MODERATE": return 2;
         case "PRICE_LEVEL_EXPENSIVE": return 3;
         case "PRICE_LEVEL_VERY_EXPENSIVE": return 4;
-        default: return undefined;
+        default: return null; // Firestore prefers null over undefined
     }
 }
