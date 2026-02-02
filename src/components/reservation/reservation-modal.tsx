@@ -16,14 +16,25 @@ import { useAuth } from "@/components/auth-provider";
 import toast from "react-hot-toast";
 
 interface ReservationModalProps {
-    placeId: string;
+    placeId?: string;
     placeName: string;
     trigger?: React.ReactNode;
+    isOpen?: boolean;
+    onClose?: () => void;
 }
 
-export function ReservationModal({ placeId, placeName, trigger }: ReservationModalProps) {
+export function ReservationModal({ placeId, placeName, trigger, isOpen, onClose }: ReservationModalProps) {
     const { user } = useAuth();
-    const [open, setOpen] = useState(false);
+    const [internalOpen, setInternalOpen] = useState(false);
+
+    // Controlled vs Uncontrolled
+    const isControlled = isOpen !== undefined;
+    const open = isControlled ? isOpen : internalOpen;
+    const setOpen = (val: boolean) => {
+        if (!isControlled) setInternalOpen(val);
+        if (!val && onClose) onClose();
+    };
+
     const [date, setDate] = useState<Date | undefined>(new Date());
     const [time, setTime] = useState("19:00");
     const [guests, setGuests] = useState(2);

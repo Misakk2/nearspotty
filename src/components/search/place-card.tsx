@@ -1,5 +1,5 @@
 import { Place } from "@/types/place";
-import { Star, MapPin, Lock, Crown, Clock } from "lucide-react";
+import { Star, MapPin, Lock, Crown, Clock, AlertTriangle } from "lucide-react";
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -29,9 +29,7 @@ export default function PlaceCard({
     userLocation
 }: PlaceCardProps) {
 
-    const photoUrl = place.photos?.[0]?.photo_reference
-        ? `https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photoreference=${place.photos[0].photo_reference}&key=${process.env.NEXT_PUBLIC_GOOGLE_PLACES_KEY}`
-        : "/placeholder-restaurant.jpg";
+    const photoUrl = place.imageSrc || place.photoUrl || "/placeholder-restaurant.jpg";
 
     const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
         const R = 6371; // Radius of the earth in km
@@ -140,7 +138,7 @@ export default function PlaceCard({
                     <CardContent className="flex-1 p-3 flex flex-col justify-between relative">
                         <div>
                             <div className="flex justify-between items-start">
-                                <h3 className="font-semibold text-sm line-clamp-1">{place.name}</h3>
+                                <h3 className="font-semibold text-sm line-clamp-1">{place.name || "Unknown Place"}</h3>
                             </div>
 
                             <div className="flex items-center text-xs text-muted-foreground mt-1">
@@ -150,11 +148,17 @@ export default function PlaceCard({
                                 <span>({place.user_ratings_total})</span>
                                 <span className="mx-1">•</span>
                                 <span>{place.types[0]?.replace("_", " ")}</span>
+                                {place.price_level !== undefined && (
+                                    <>
+                                        <span className="mx-1">•</span>
+                                        <span>{"€".repeat(place.price_level)}</span>
+                                    </>
+                                )}
                             </div>
 
                             <div className="flex items-center text-xs text-muted-foreground mt-1 line-clamp-1">
                                 <MapPin className="h-3 w-3 mr-1 shrink-0" />
-                                <span className="truncate">{place.vicinity}</span>
+                                <span className="truncate">{place.formatted_address || place.vicinity}</span>
                                 {distance && <span className="ml-1 font-medium text-primary">• {distance} km</span>}
                             </div>
                         </div>
@@ -162,7 +166,13 @@ export default function PlaceCard({
                         {/* AI Analysis Result or Upgrade CTA */}
                         <div className="mt-3">
                             {score ? (
-                                <div className="bg-primary/5 p-2 rounded-md border border-primary/10">
+                                <div className={`p-2 rounded-md border ${score.warning ? "bg-red-50 border-red-200" : "bg-primary/5 border-primary/10"}`}>
+                                    {score.warning && (
+                                        <div className="flex items-center gap-2 mb-1.5 pb-1.5 border-b border-red-200">
+                                            <AlertTriangle className="h-3 w-3 text-red-600 shrink-0" />
+                                            <span className="text-[10px] font-bold text-red-700">Dietary Warning</span>
+                                        </div>
+                                    )}
                                     <p className="text-[10px] text-gray-700 line-clamp-2 leading-tight">
                                         <span className="font-semibold text-primary">AI:</span> {score.shortReason}
                                     </p>
@@ -170,6 +180,31 @@ export default function PlaceCard({
                                         <p className="text-[9px] text-gray-500 mt-1 truncate">
                                             🍽️ Try: {score.recommendedDish}
                                         </p>
+                                    )}
+                                    {/* Pros and Cons */}
+                                    {(score.pros?.length > 0 || score.cons?.length > 0) && (
+                                        <div className="mt-2 grid grid-cols-2 gap-2">
+                                            {score.pros?.length > 0 && (
+                                                <div>
+                                                    <p className="text-[9px] font-semibold text-green-700 mb-0.5">Pros</p>
+                                                    <ul className="list-disc list-inside text-[9px] text-gray-600 leading-tight">
+                                                        {score.pros.slice(0, 2).map((pro, i) => (
+                                                            <li key={i} className="truncate">{pro}</li>
+                                                        ))}
+                                                    </ul>
+                                                </div>
+                                            )}
+                                            {score.cons?.length > 0 && (
+                                                <div>
+                                                    <p className="text-[9px] font-semibold text-red-700 mb-0.5">Cons</p>
+                                                    <ul className="list-disc list-inside text-[9px] text-gray-600 leading-tight">
+                                                        {score.cons.slice(0, 2).map((con, i) => (
+                                                            <li key={i} className="truncate">{con}</li>
+                                                        ))}
+                                                    </ul>
+                                                </div>
+                                            )}
+                                        </div>
                                     )}
                                 </div>
                             ) : limitReached ? (

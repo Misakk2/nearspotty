@@ -14,7 +14,7 @@ export interface CachedPlace {
         types: string[];
         price_level?: number;
         vicinity: string;
-        formatted_address?: string;
+        formatted_address?: string; // Stored address
         photos?: {
             photo_reference: string;
             height: number;
@@ -24,6 +24,7 @@ export interface CachedPlace {
             open_now: boolean;
             weekday_text?: string[];
         };
+        imageSrc?: string; // Cached image URL
     };
     reviews?: {
         author_name: string;
@@ -89,6 +90,7 @@ export function placeToCache(place: Place, gridKey: string, ttlMs: number = 24 *
             formatted_address: place.formatted_address,
             photos: place.photos,
             opening_hours: place.opening_hours,
+            imageSrc: place.imageSrc, // Save imageSrc
         },
         reviews: place.reviews,
         geometry: place.geometry,
@@ -115,5 +117,7 @@ export function cacheToPlace(cached: CachedPlace): Place {
         opening_hours: cached.basic_info.opening_hours,
         reviews: cached.reviews,
         geometry: cached.geometry,
+        imageSrc: cached.basic_info.imageSrc || "/placeholder-restaurant.jpg", // Restore or fallback
+        photoUrl: cached.basic_info.imageSrc // Backward compat
     };
 }

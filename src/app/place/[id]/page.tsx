@@ -4,16 +4,23 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Place } from "@/types/place";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/components/auth-provider";
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { UserPreferences, GeminiScore } from "@/types";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, Star, MapPin, Phone, Globe, Clock, ArrowLeft, Sparkles, AlertTriangle, CheckCircle2, ThumbsUp, ThumbsDown, UtensilsCrossed } from "lucide-react";
+import { Card, CardContent } from "@/components/ui/card";
+import { Loader2, Star, MapPin, Phone, Globe, Clock, ArrowLeft, Sparkles, CheckCircle2, XCircle, Utensils, CalendarDays, Share2, Info, Image as ImageIcon } from "lucide-react";
 import { ReservationModal } from "@/components/reservation/reservation-modal";
 import { MatchScoreBadge } from "@/components/search/MatchScoreBadge";
+import { CommunicativeLoader } from "@/components/ui/CommunicativeLoader";
 import toast from "react-hot-toast";
+import FsLightbox from "fslightbox-react";
+
+// Helper to safely get photo URL
+const getPhotoUrl = (photoReference?: string) => {
+    if (!photoReference) return null;
+    return `https://maps.googleapis.com/maps/api/place/photo?maxwidth=800&photoreference=${photoReference}&key=${process.env.NEXT_PUBLIC_GOOGLE_PLACES_KEY}`;
+};
 
 export default function PlaceDetailPage() {
     const params = useParams();
@@ -26,6 +33,12 @@ export default function PlaceDetailPage() {
     const [preferences, setPreferences] = useState<UserPreferences | null>(null);
     const [aiScore, setAiScore] = useState<GeminiScore | null>(null);
     const [analyzing, setAnalyzing] = useState(false);
+
+    // UI State
+    const [activeTab, setActiveTab] = useState<'overview' | 'menu' | 'photos' | 'reviews'>('overview');
+    const [isReservationOpen, setIsReservationOpen] = useState(false);
+    const [lightboxController, setLightboxController] = useState(false);
+    const [lightboxSlide, setLightboxSlide] = useState(1);
 
     // Fetch User Preferences
     useEffect(() => {
@@ -53,6 +66,9 @@ export default function PlaceDetailPage() {
                 const data = await res.json();
                 if (res.ok) {
                     setPlace(data);
+                    // Check if we have a persisted score for this place in localStorage? 
+                    // For now, we rely on user triggering analysis or passed state if we had a global store.
+                    // Ideally, we'd check if we already analyzed this place recently.
                 } else {
                     toast.error(data.error || "Failed to load place");
                 }
@@ -69,273 +85,395 @@ export default function PlaceDetailPage() {
         }
     }, [placeId]);
 
-    // AI Analysis
-    const handleAnalyze = async () => {
-        if (!preferences || !place) return;
-        setAnalyzing(true);
-        try {
-            const res = await fetch("/api/gemini/score", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    placeId: place.place_id,
-                    name: place.name,
-                    dietary: preferences,
-                    // If place details fetched reviews, pass them to save an API call
-                    reviews: place.reviews
-                })
-            });
-            const data = await res.json();
-            if (res.ok) {
-                setAiScore(data);
-                toast.success("AI Analysis Complete!");
-            } else {
-                toast.error("Analysis failed");
-            }
-        } catch (error) {
-            console.error(error);
-            toast.error("Analysis error");
-        } finally {
-            setAnalyzing(false);
+    // Perform AI Analysis automatically if preferences exist
+    useEffect(() => {
+        if (place && preferences && !aiScore && !analyzing) {
+            const analyze = async () => {
+                setAnalyzing(true);
+                try {
+                    const res = await fetch("/api/gemini/score", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            placeId: place.place_id,
+                            name: place.name,
+                            dietary: preferences,
+                            reviews: place.reviews // Pass reviews for better context
+                        })
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                        setAiScore(data);
+                    }
+                } catch (error) {
+                    console.error("Auto analysis failed", error);
+                } finally {
+                    setAnalyzing(false);
+                }
+            };
+            analyze();
         }
-    };
+    }, [place, preferences, aiScore, analyzing]);
+
 
     if (loading) {
-        return <div className="min-h-screen flex items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>;
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-gray-50">
+                <CommunicativeLoader />
+            </div>
+        );
     }
 
-    if (!place) {
-        return <div className="min-h-screen flex items-center justify-center">Place not found</div>;
-    }
+    if (!place) return <div className="p-8 text-center text-muted-foreground">Place not found</div>;
 
-    const mainPhotoUrl = place.photos?.[0]?.photo_reference
-        ? `https://maps.googleapis.com/maps/api/place/photo?maxwidth=800&photoreference=${place.photos[0].photo_reference}&key=${process.env.NEXT_PUBLIC_GOOGLE_PLACES_KEY}`
-        : "/placeholder-restaurant.jpg";
+    const mainPhoto = place.photos?.[0]?.photo_reference ? getPhotoUrl(place.photos[0].photo_reference) : null;
+    const additionalPhotos = place.photos?.slice(1) || [];
 
     return (
-        <div className="min-h-screen bg-gray-50 pb-20">
+        <div className="min-h-screen bg-gray-50 pb-24 md:pb-0">
             {/* Header / Hero */}
-            <div className="relative h-64 md:h-80 w-full bg-gray-200">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={mainPhotoUrl} alt={place.name} className="w-full h-full object-cover" />
-                <div className="absolute top-4 left-4">
-                    <Button variant="secondary" size="sm" onClick={() => router.back()} className="rounded-full">
-                        <ArrowLeft className="h-4 w-4 mr-1" /> Back
+            <header className="relative h-[33vh] w-full bg-gray-900 overflow-hidden">
+                {mainPhoto ? (
+                    <img
+                        src={mainPhoto}
+                        alt={place.name}
+                        className="w-full h-full object-cover opacity-80"
+                    />
+                ) : (
+                    <div className="w-full h-full flex items-center justify-center bg-gray-800 text-gray-500">
+                        <ImageIcon className="h-16 w-16" />
+                    </div>
+                )}
+
+                <div className="absolute top-4 left-4 z-10">
+                    <Button variant="secondary" size="sm" className="bg-white/90 backdrop-blur" onClick={() => router.back()}>
+                        <ArrowLeft className="h-4 w-4 mr-2" /> Back
                     </Button>
                 </div>
-                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-6 text-white">
-                    <h1 className="text-3xl font-bold">{place.name}</h1>
-                    <div className="flex items-center mt-2 text-sm opacity-90">
-                        <span className="text-yellow-400 font-bold flex items-center mr-2">
-                            {place.rating} <Star className="h-4 w-4 fill-current ml-1" />
-                        </span>
-                        <span>({place.user_ratings_total} reviews)</span>
-                        <span className="mx-2">•</span>
-                        <span>{place.types[0]?.replace("_", " ")}</span>
-                        {place.price_level && (
-                            <>
-                                <span className="mx-2">•</span>
-                                <span>{"€".repeat(place.price_level)}</span>
-                            </>
-                        )}
-                    </div>
-                </div>
-            </div>
 
-            <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
-
-                {/* AI Score Section - "Why for You?" */}
-                <Card className="border-primary/20 bg-gradient-to-br from-primary/5 to-primary/10 shadow-md overflow-hidden">
-                    <CardHeader className="pb-2">
-                        <CardTitle className="text-lg flex items-center gap-2">
-                            <Sparkles className="h-5 w-5 text-primary" />
-                            Why for You?
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                        {!aiScore ? (
-                            <div className="flex flex-col items-center justify-center p-4">
-                                <p className="text-muted-foreground mb-4 text-center text-sm">
-                                    Get a personalized AI analysis based on your preferences ({preferences?.dietary?.join(", ") || "not set"}).
-                                </p>
-                                <Button onClick={handleAnalyze} disabled={analyzing || !preferences} className="w-full sm:w-auto">
-                                    {analyzing ? (
-                                        <> <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Analyzing... </>
-                                    ) : (
-                                        "Check Match"
+                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent p-6 md:p-10 pt-20">
+                    <div className="container mx-auto max-w-5xl">
+                        <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+                            <div>
+                                <h1 className="text-3xl md:text-5xl font-bold text-white mb-2">{place.name}</h1>
+                                <div className="flex flex-wrap items-center gap-3 text-white/90 text-sm md:text-base">
+                                    {place.rating && (
+                                        <div className="flex items-center gap-1 bg-white/20 px-2 py-0.5 rounded backdrop-blur-sm">
+                                            <Star className="h-4 w-4 fill-amber-400 text-amber-400" />
+                                            <span className="font-semibold">{place.rating}</span>
+                                            <span className="text-white/60">({place.user_ratings_total})</span>
+                                        </div>
                                     )}
-                                </Button>
+                                    {place.price_level !== undefined && (
+                                        <div className="flex items-center bg-white/20 px-2 py-0.5 rounded backdrop-blur-sm text-green-300 font-medium">
+                                            {Array(place.price_level).fill("€").join("")}
+                                        </div>
+                                    )}
+                                    <div className="flex items-center gap-1">
+                                        <MapPin className="h-4 w-4 text-white/70" />
+                                        <span className="truncate max-w-[200px] md:max-w-none">{place.formatted_address}</span>
+                                    </div>
+                                </div>
                             </div>
-                        ) : (
-                            <div className="space-y-5">
-                                {/* Score Header */}
-                                <div className="flex items-center gap-4">
+
+                            {/* AI Score Badge in Header */}
+                            {aiScore && (
+                                <div className="shrink-0 animate-in fade-in slide-in-from-bottom-4 duration-700">
                                     <MatchScoreBadge score={aiScore.matchScore} size="lg" />
-                                    <div className="flex-1">
-                                        <p className="text-sm font-medium text-gray-500 mb-1">Match Score</p>
-                                        <p className="text-gray-700">{aiScore.shortReason}</p>
-                                    </div>
+                                    <p className="text-center text-xs text-green-200 mt-1 font-medium">AI Match Score</p>
                                 </div>
-
-                                {/* Pros & Cons Grid */}
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                    {/* Pros */}
-                                    {aiScore.pros && aiScore.pros.length > 0 && (
-                                        <div className="bg-green-50/80 rounded-xl p-4 border border-green-100">
-                                            <p className="text-xs font-semibold uppercase text-green-700 mb-2 flex items-center gap-1">
-                                                <ThumbsUp className="h-3 w-3" /> Pros
-                                            </p>
-                                            <ul className="space-y-1">
-                                                {aiScore.pros.map((pro, i) => (
-                                                    <li key={i} className="flex items-start gap-2 text-sm text-green-800">
-                                                        <CheckCircle2 className="h-4 w-4 text-green-600 mt-0.5 shrink-0" />
-                                                        {pro}
-                                                    </li>
-                                                ))}
-                                            </ul>
-                                        </div>
-                                    )}
-
-                                    {/* Cons */}
-                                    {aiScore.cons && aiScore.cons.length > 0 && (
-                                        <div className="bg-amber-50/80 rounded-xl p-4 border border-amber-100">
-                                            <p className="text-xs font-semibold uppercase text-amber-700 mb-2 flex items-center gap-1">
-                                                <ThumbsDown className="h-3 w-3" /> Cons
-                                            </p>
-                                            <ul className="space-y-1">
-                                                {aiScore.cons.map((con, i) => (
-                                                    <li key={i} className="flex items-start gap-2 text-sm text-amber-800">
-                                                        <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
-                                                        {con}
-                                                    </li>
-                                                ))}
-                                            </ul>
-                                        </div>
-                                    )}
-                                </div>
-
-                                {/* Recommended Dish */}
-                                {aiScore.recommendedDish && (
-                                    <div className="bg-white/60 rounded-xl p-4 border border-gray-100">
-                                        <p className="text-xs font-semibold uppercase text-gray-500 mb-2 flex items-center gap-1">
-                                            <UtensilsCrossed className="h-3 w-3" /> Recommended for You
-                                        </p>
-                                        <p className="text-gray-800 font-medium">{aiScore.recommendedDish}</p>
-                                    </div>
-                                )}
-
-                                {/* Warnings */}
-                                {aiScore.warnings && aiScore.warnings.length > 0 && (
-                                    <div className="bg-red-50/80 rounded-xl p-4 border border-red-100">
-                                        <p className="text-xs font-semibold uppercase text-red-700 mb-2 flex items-center gap-1">
-                                            <AlertTriangle className="h-3 w-3" /> Warnings
-                                        </p>
-                                        <div className="flex flex-wrap gap-2">
-                                            {aiScore.warnings.map((warn, i) => (
-                                                <Badge key={i} variant="outline" className="bg-red-100 text-red-700 border-red-200">
-                                                    {warn}
-                                                </Badge>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                    </CardContent>
-                </Card>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    {/* Info Sidebar */}
-                    <div className="space-y-6">
-                        <Card>
-                            <CardContent className="p-4 space-y-4">
-                                <div className="flex items-start gap-3">
-                                    <MapPin className="h-5 w-5 text-gray-400 mt-0.5 shrink-0" />
-                                    <div>
-                                        <p className="text-sm font-medium">Address</p>
-                                        <p className="text-sm text-gray-600">{place.formatted_address}</p>
-                                    </div>
-                                </div>
-                                {place.formatted_phone_number && (
-                                    <div className="flex items-start gap-3">
-                                        <Phone className="h-5 w-5 text-gray-400 mt-0.5 shrink-0" />
-                                        <div>
-                                            <p className="text-sm font-medium">Phone</p>
-                                            <p className="text-sm text-blue-600">{place.formatted_phone_number}</p>
-                                        </div>
-                                    </div>
-                                )}
-                                {place.website && (
-                                    <div className="flex items-start gap-3">
-                                        <Globe className="h-5 w-5 text-gray-400 mt-0.5 shrink-0" />
-                                        <div>
-                                            <p className="text-sm font-medium">Website</p>
-                                            <a href={place.website} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 hover:underline truncate block max-w-[200px]">
-                                                {new URL(place.website).hostname}
-                                            </a>
-                                        </div>
-                                    </div>
-                                )}
-                                {place.opening_hours?.weekday_text && (
-                                    <div className="flex items-start gap-3">
-                                        <Clock className="h-5 w-5 text-gray-400 mt-0.5 shrink-0" />
-                                        <div>
-                                            <p className="text-sm font-medium mb-1">Opening Hours</p>
-                                            <ul className="text-xs text-gray-600 space-y-1">
-                                                {place.opening_hours.weekday_text.map((day) => (
-                                                    <li key={day}>{day}</li>
-                                                ))}
-                                            </ul>
-                                        </div>
-                                    </div>
-                                )}
-                            </CardContent>
-                        </Card>
-
-                        <ReservationModal
-                            placeId={place.place_id}
-                            placeName={place.name}
-                            trigger={
-                                <Button size="lg" className="w-full font-semibold shadow-lg">
-                                    Book a Table
-                                </Button>
-                            }
-                        />
-                    </div>
-
-                    {/* Main Info */}
-                    <div className="md:col-span-2 space-y-6">
-                        {/* Reviews */}
-                        <div className="space-y-4">
-                            <h2 className="text-xl font-semibold">Reviews</h2>
-                            {place.reviews && place.reviews.length > 0 ? (
-                                place.reviews.map((review, i) => (
-                                    <Card key={i} className="border-none shadow-sm bg-white">
-                                        <CardContent className="p-4">
-                                            <div className="flex items-center gap-2 mb-2">
-                                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                                <img src={review.profile_photo_url} alt={review.author_name} className="w-8 h-8 rounded-full" />
-                                                <div>
-                                                    <p className="text-sm font-medium">{review.author_name}</p>
-                                                    <div className="flex items-center text-xs text-yellow-500">
-                                                        {Array.from({ length: 5 }).map((_, j) => (
-                                                            <Star key={j} className={`h-3 w-3 ${j < review.rating ? "fill-current" : "text-gray-300 fill-none"}`} />
-                                                        ))}
-                                                        <span className="text-gray-400 ml-2">{review.relative_time_description}</span>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                            <p className="text-sm text-gray-700 leading-relaxed">{review.text}</p>
-                                        </CardContent>
-                                    </Card>
-                                ))
-                            ) : (
-                                <p className="text-muted-foreground">No reviews available.</p>
                             )}
                         </div>
                     </div>
                 </div>
+            </header>
+
+            <main className="container mx-auto max-w-5xl px-4 py-6 md:py-8">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+
+                    {/* LEFT COLUMN: Main Content */}
+                    <div className="md:col-span-2 space-y-8">
+
+                        {/* Tab Navigation */}
+                        <div className="flex items-center gap-4 border-b overflow-x-auto pb-1 no-scrollbar">
+                            <button
+                                onClick={() => setActiveTab('overview')}
+                                className={`pb-3 px-2 text-sm font-medium transition-colors whitespace-nowrap ${activeTab === 'overview' ? 'text-primary border-b-2 border-primary' : 'text-muted-foreground hover:text-gray-900'}`}
+                            >
+                                Overview
+                            </button>
+                            <button
+                                onClick={() => setActiveTab('menu')}
+                                className={`pb-3 px-2 text-sm font-medium transition-colors whitespace-nowrap ${activeTab === 'menu' ? 'text-primary border-b-2 border-primary' : 'text-muted-foreground hover:text-gray-900'}`}
+                            >
+                                Menu & Dining
+                            </button>
+                            <button
+                                onClick={() => setActiveTab('photos')}
+                                className={`pb-3 px-2 text-sm font-medium transition-colors whitespace-nowrap ${activeTab === 'photos' ? 'text-primary border-b-2 border-primary' : 'text-muted-foreground hover:text-gray-900'}`}
+                            >
+                                Photos {additionalPhotos.length > 0 && `(${additionalPhotos.length})`}
+                            </button>
+                            <button
+                                onClick={() => setActiveTab('reviews')}
+                                className={`pb-3 px-2 text-sm font-medium transition-colors whitespace-nowrap ${activeTab === 'reviews' ? 'text-primary border-b-2 border-primary' : 'text-muted-foreground hover:text-gray-900'}`}
+                            >
+                                Reviews
+                            </button>
+                        </div>
+
+                        {/* TAB CONTENT: OVERVIEW */}
+                        {activeTab === 'overview' && (
+                            <div className="space-y-6">
+                                {/* Only For You Section (AI) */}
+                                {activeTab === 'overview' && (aiScore || analyzing) && (
+                                    <div className="bg-gradient-to-br from-indigo-50 to-purple-50 rounded-xl p-6 border border-indigo-100/50 shadow-sm relative overflow-hidden">
+                                        <div className="absolute top-0 right-0 p-4 opacity-10">
+                                            <Sparkles className="h-24 w-24 text-indigo-500" />
+                                        </div>
+
+                                        <div className="relative z-10">
+                                            <div className="flex items-center gap-2 mb-4">
+                                                <div className="bg-indigo-600 text-white p-1.5 rounded-lg shadow-sm">
+                                                    <Sparkles className="h-4 w-4" />
+                                                </div>
+                                                <h2 className="text-lg font-bold text-gray-900">Why for {preferences?.dietary?.[0] || "you"}?</h2>
+                                            </div>
+
+                                            {analyzing ? (
+                                                <div className="flex items-center gap-3 text-indigo-700">
+                                                    <Loader2 className="h-5 w-5 animate-spin" />
+                                                    <span className="font-medium animate-pulse">Analyzing based on your taste profile...</span>
+                                                </div>
+                                            ) : aiScore ? (
+                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                                    <div className="space-y-3">
+                                                        <h3 className="text-sm font-semibold text-green-700 flex items-center gap-1.5 uppercase tracking-wide">
+                                                            <CheckCircle2 className="h-4 w-4" /> Perfect For You
+                                                        </h3>
+                                                        <ul className="space-y-2">
+                                                            {aiScore.pros?.map((pro, i) => (
+                                                                <li key={i} className="text-sm text-gray-700 flex items-start gap-2">
+                                                                    <span className="block w-1.5 h-1.5 rounded-full bg-green-400 mt-1.5 shrink-0" />
+                                                                    {pro}
+                                                                </li>
+                                                            ))}
+                                                        </ul>
+                                                    </div>
+                                                    {aiScore.cons && aiScore.cons.length > 0 && (
+                                                        <div className="space-y-3">
+                                                            <h3 className="text-sm font-semibold text-rose-700 flex items-center gap-1.5 uppercase tracking-wide">
+                                                                <XCircle className="h-4 w-4" /> Keep in mind
+                                                            </h3>
+                                                            <ul className="space-y-2">
+                                                                {aiScore.cons.map((con, i) => (
+                                                                    <li key={i} className="text-sm text-gray-700 flex items-start gap-2">
+                                                                        <span className="block w-1.5 h-1.5 rounded-full bg-rose-400 mt-1.5 shrink-0" />
+                                                                        {con}
+                                                                    </li>
+                                                                ))}
+                                                            </ul>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            ) : null}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Basic Info Grid */}
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    {place.opening_hours?.open_now !== undefined && (
+                                        <Card className="shadow-sm border-gray-100 bg-white">
+                                            <CardContent className="p-4 flex items-center gap-3">
+                                                <div className={`p-2 rounded-full ${place.opening_hours.open_now ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                                    <Clock className="h-5 w-5" />
+                                                </div>
+                                                <div>
+                                                    <p className={`font-semibold ${place.opening_hours.open_now ? 'text-green-700' : 'text-red-700'}`}>
+                                                        {place.opening_hours.open_now ? 'Open Now' : 'Closed'}
+                                                    </p>
+                                                    <p className="text-xs text-muted-foreground">Check schedule in map</p>
+                                                </div>
+                                            </CardContent>
+                                        </Card>
+                                    )}
+
+                                    {place.website && (
+                                        <Card className="shadow-sm border-gray-100 bg-white group cursor-pointer hover:border-primary/20 transition-colors" onClick={() => window.open(place.website, '_blank')}>
+                                            <CardContent className="p-4 flex items-center gap-3">
+                                                <div className="p-2 rounded-full bg-blue-50 text-blue-600 group-hover:bg-blue-100 transition-colors">
+                                                    <Globe className="h-5 w-5" />
+                                                </div>
+                                                <div>
+                                                    <p className="font-semibold text-gray-900 group-hover:text-primary transition-colors">Visit Website</p>
+                                                    <p className="text-xs text-muted-foreground truncate max-w-[150px]">{place.website.replace(/^https?:\/\//, '')}</p>
+                                                </div>
+                                            </CardContent>
+                                        </Card>
+                                    )}
+                                </div>
+
+                                {/* About Section */}
+                                <div className="prose prose-sm max-w-none text-gray-600">
+                                    <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                                        <Info className="h-5 w-5 text-gray-400" />
+                                        About {place.name}
+                                    </h3>
+                                    <p>
+                                        {aiScore?.shortReason || "A popular spot in town."}
+                                    </p>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* TAB CONTENT: MENU */}
+                        {activeTab === 'menu' && (
+                            <div className="space-y-6">
+                                <div className="text-center py-10 bg-white border rounded-xl border-dashed">
+                                    <Utensils className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+                                    <h3 className="text-lg font-medium">Menu</h3>
+                                    {place.website ? (
+                                        <div className="mt-4">
+                                            <Button variant="outline" onClick={() => window.open(place.website, '_blank')}>
+                                                Verify Menu on Website
+                                            </Button>
+                                        </div>
+                                    ) : (
+                                        <p className="text-sm text-muted-foreground mt-2">No online menu detected. Try calling the venue.</p>
+                                    )}
+                                </div>
+
+                                {aiScore?.recommendedDish && (
+                                    <div className="bg-orange-50 p-4 rounded-lg border border-orange-100">
+                                        <h4 className="font-semibold text-orange-800 mb-2 flex items-center gap-2">
+                                            <Star className="h-4 w-4 fill-orange-500 text-orange-500" />
+                                            AI Selection
+                                        </h4>
+                                        <p className="text-sm text-gray-700">
+                                            Based on reviews, people love the <span className="font-bold text-gray-900">"{aiScore.recommendedDish}"</span> here!
+                                        </p>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                            {additionalPhotos.length > 0 ? additionalPhotos.map((photo, i) => (
+                                <div
+                                    key={i}
+                                    className="aspect-square bg-gray-100 rounded-lg overflow-hidden relative group cursor-pointer"
+                                    onClick={() => {
+                                        setLightboxSlide(i + 1);
+                                        setLightboxController(!lightboxController);
+                                    }}
+                                >
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img
+                                        src={getPhotoUrl(photo.photo_reference) || ""}
+                                        alt={`Photo ${i}`}
+                                        className="w-full h-full object-cover transition-transform group-hover:scale-105"
+                                    />
+                                </div>
+                            )) : (
+                                <p className="col-span-full text-center py-10 text-muted-foreground">No additional photos available.</p>
+                            )}
+                        </div>
+                        <FsLightbox
+                            toggler={lightboxController}
+                            slide={lightboxSlide}
+                            sources={additionalPhotos.map(p => getPhotoUrl(p.photo_reference) || "")}
+                        />
+
+                        {/* TAB CONTENT: REVIEWS */}
+                        {activeTab === 'reviews' && (
+                            <div className="space-y-4">
+                                {place.reviews?.map((review, i) => (
+                                    <Card key={i} className="bg-white hover:bg-gray-50/50 transition-colors">
+                                        <CardContent className="p-4">
+                                            <div className="flex items-center gap-2 mb-2">
+                                                <div className="flex text-amber-400">
+                                                    {Array(5).fill(0).map((_, starI) => (
+                                                        <Star key={starI} className={`h-3 w-3 ${starI < review.rating ? 'fill-current' : 'text-gray-300'}`} />
+                                                    ))}
+                                                </div>
+                                                <span className="text-xs font-semibold text-gray-900">{review.author_name}</span>
+                                                <span className="text-xs text-muted-foreground ml-auto">{review.relative_time_description}</span>
+                                            </div>
+                                            <p className="text-sm text-gray-600 leading-relaxed italic">"{review.text}"</p>
+                                        </CardContent>
+                                    </Card>
+                                )) || (
+                                        <p className="text-center py-10 text-muted-foreground">No reviews available via API.</p>
+                                    )}
+                            </div>
+                        )}
+
+                    </div>
+
+                    {/* RIGHT COLUMN: Sticky Booking / Quick Info */}
+                    <div className="md:col-span-1">
+                        <div className="sticky top-24 space-y-4">
+                            {/* Booking Card */}
+                            <Card className="border-2 border-primary/10 shadow-lg overflow-hidden">
+                                <div className="bg-primary/5 p-3 text-center border-b border-primary/10">
+                                    <p className="text-sm font-semibold text-primary">NearSpotty Member Perk</p>
+                                </div>
+                                <CardContent className="p-6 space-y-4">
+                                    <div className="text-center">
+                                        <p className="text-gray-500 text-sm mb-1">Make a reservation</p>
+                                        <p className="text-lg font-bold text-gray-900">Reserve a Table</p>
+                                    </div>
+
+                                    <Button size="lg" className="w-full font-bold shadow-md hover:shadow-lg transition-all" onClick={() => setIsReservationOpen(true)}>
+                                        <CalendarDays className="h-4 w-4 mr-2" />
+                                        Request Booking
+                                    </Button>
+
+                                    <p className="text-xs text-center text-muted-foreground mt-2">
+                                        Free for NearSpotty users. Instant confirmation via SMS.
+                                    </p>
+                                </CardContent>
+                            </Card>
+
+                            {/* Location Card */}
+                            <Card>
+                                <CardContent className="p-4">
+                                    <h4 className="font-semibold text-sm mb-3">Getting There</h4>
+                                    {place.formatted_address && (
+                                        <div className="flex gap-2 text-sm text-gray-600 mb-4">
+                                            <MapPin className="h-4 w-4 shrink-0 mt-0.5" />
+                                            {place.formatted_address}
+                                        </div>
+                                    )}
+                                    {place.formatted_phone_number && (
+                                        <div className="flex gap-2 text-sm text-gray-600">
+                                            <Phone className="h-4 w-4 shrink-0 mt-0.5" />
+                                            {place.formatted_phone_number}
+                                        </div>
+                                    )}
+                                </CardContent>
+                            </Card>
+                        </div>
+                    </div>
+                </div>
+            </main>
+
+            {/* Mobile Fixed CTA */}
+            <div className="fixed bottom-0 left-0 right-0 p-4 bg-white/95 backdrop-blur border-t md:hidden z-50 flex items-center gap-3 shadow-[0_-5px_15px_-5px_rgba(0,0,0,0.1)]">
+                <Button variant="outline" size="icon" className="shrink-0">
+                    <Share2 className="h-4 w-4" />
+                </Button>
+                <Button className="w-full font-bold shadow-md" onClick={() => setIsReservationOpen(true)}>
+                    Book Table
+                </Button>
             </div>
+
+            <ReservationModal
+                isOpen={isReservationOpen}
+                onClose={() => setIsReservationOpen(false)}
+                placeName={place.name}
+            />
         </div>
     );
 }

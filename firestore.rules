@@ -19,9 +19,10 @@ service cloud.firestore {
       }
     }
 
-    // Cities Cache - Authenticated users can read/write for caching mechanism
+    // Cities Cache - Read-only for clients (Admin SDK handles writes)
     match /cities/{cityId} {
-      allow read, write: if isAuthenticated();
+      allow read: if isAuthenticated();
+      allow write: if false; 
     }
 
     // Restaurants/Websites
@@ -39,7 +40,8 @@ service cloud.firestore {
         resource.data.userId == request.auth.uid || 
         get(/databases/$(database)/documents/websites/$(resource.data.websiteId)).data.ownerId == request.auth.uid
       );
-      allow create: if isAuthenticated();
+      // Prevent IDOR: Ensure user can only create reservation for themselves
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
       allow update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
     }
 

@@ -50,7 +50,7 @@ Rules:
 - NO markdown.
 
 Output Schema:
-[{"matchScore": number, "shortReason": "string (max 10 words)", "recommendedDish": "string"}]
+[{"matchScore": number, "shortReason": "string (max 10 words)", "recommendedDish": "string", "pros": ["string"], "cons": ["string"]}]
 `;
 
     try {
@@ -68,8 +68,8 @@ Output Schema:
                 matchScore: raw.matchScore || 50,
                 shortReason: raw.shortReason || "Analysis unavailable",
                 recommendedDish: raw.recommendedDish || "",
-                pros: [],
-                cons: [],
+                pros: Array.isArray(raw.pros) ? raw.pros : [],
+                cons: Array.isArray(raw.cons) ? raw.cons : [],
                 warnings: []
             });
         });
@@ -90,42 +90,36 @@ export async function scorePlacesWithDeepContext(
 ): Promise<Map<string, GeminiScore>> {
     if (!places.length) return new Map();
 
-    const placesInfo = places.map((p, i) =>
-        `ID: ${i + 1}
-Name: "${p.name}" (${p.types.slice(0, 2).join(',')})
-Rating: ${p.rating || '-'}
-Summary: ${p.editorialSummary || "N/A"}
-Vegetarian Options: ${p.servesVegetarianFood ? "Yes" : "Unknown"}
-Sample Reviews:
-${p.reviews?.map(r => {
-            // Safety check: Ensure text exists and is a string
-            const reviewText = typeof r.text === 'string'
-                ? r.text
-                : (typeof r.text === 'object' && r.text !== null && 'text' in r.text ? (r.text as any).text : "");
-
-            if (!reviewText) return ""; // Skip empty reviews
-
-            return `- [${r.flag || "NEUTRAL"}] "${reviewText.substring(0, 150)}..."`;
-        }).filter(Boolean).join('\n') || "No reviews provided."}
-`
-    ).join('\n---\n');
+    // Prepare JSON Payload for Gemini (as requested)
+    const placesPayload = places.map((p, i) => ({
+        id: i + 1, // Use index as ID for mapping back
+        name: p.name,
+        types: p.types.slice(0, 3),
+        rating: p.rating,
+        summary: p.editorialSummary || "No summary",
+        reviews: p.reviews?.map(r => {
+            const text = typeof r.text === 'string' ? r.text : (r.text as any)?.text || "";
+            return text.substring(0, 200); // Truncate for token limits
+        }).slice(0, 5) || [], // Top 5 reviews
+        vegetarian: p.servesVegetarianFood
+    }));
 
     const prompt = `
-Role: Dietary Concierge.
+Task: Analyze these restaurants against the specific User Profile.
 User Profile: ${JSON.stringify(userProfile)}
 
-Task: Analyze these restaurants. Score 0-100 on SAFETY and VIBE match.
-Focus on: Dietary safety (allergies), vibe (budget/atmosphere), and review sentiment.
-Input reviews already have pre-calculated flags [SAFE_CANDIDATE] or [RISK]. Trust these flags heavily for safety scoring.
+Restaurants Data (JSON):
+${JSON.stringify(placesPayload, null, 2)}
 
-Restaurants to Analyze:
-${placesInfo}
+Strict Scoring Rules:
+1. SAFETY FIRST: If a review mentions "cross-contamination", "got sick", "reaction", or explicit diet violation (e.g. "found meat" for vegan) -> Score MUST be < 50. Set "warning_flag": true.
+2. RELEVANCE: If the place perfectly matches the query AND diet (e.g. "Dedicated GF" for Celiac) -> Score MUST be > 90.
+3. If no relevant info found -> Score ~70-75 (Neutral).
 
 Output Requirements:
-- Return strictly a JSON Array of objects.
-- Order must match input list.
-- Schema: [{"matchScore": number, "shortReason": "string (max 15 words)", "recommendedDish": "string (guess from context)", "warnings": ["string"]}]
-- NO Markdown.
+- Return a JSON Array exactly matching the input list size and order.
+- Each item: { "id": number, "matchScore": number (0-100), "shortReason": "string (max 15 words)", "warning_flag": boolean, "pros": ["string"], "cons": ["string"] }
+- NO Markdown formatting. Just the raw JSON array.
 `;
 
     try {
@@ -133,19 +127,34 @@ Output Requirements:
         const response = await result.response;
         const text = response.text();
         const jsonStr = text.replace(/```json\n?|\n?```/g, "").trim();
-        const scores = JSON.parse(jsonStr);
+        let scores: any[] = [];
+
+        try {
+            scores = JSON.parse(jsonStr);
+        } catch (e) {
+            console.error("Failed to parse Gemini JSON output:", jsonStr);
+            // Fallback: Try to find array bracket
+            const start = jsonStr.indexOf('[');
+            const end = jsonStr.lastIndexOf(']');
+            if (start !== -1 && end !== -1) {
+                scores = JSON.parse(jsonStr.substring(start, end + 1));
+            }
+        }
 
         const results = new Map<string, GeminiScore>();
 
         places.forEach((p, i) => {
-            const raw = scores[i] || {};
+            // Find score by ID (since we used index + 1) or index fallback
+            const raw = scores.find((s: any) => s.id === i + 1) || scores[i] || {};
+
             results.set(p.place_id, {
-                matchScore: typeof raw.matchScore === 'number' ? raw.matchScore : 50,
-                shortReason: raw.shortReason || "Analysis unavailable",
+                matchScore: typeof raw.matchScore === 'number' ? raw.matchScore : 70,
+                shortReason: raw.shortReason || "AI analysis pending",
                 recommendedDish: raw.recommendedDish || "",
-                pros: [],
-                cons: [],
-                warnings: Array.isArray(raw.warnings) ? raw.warnings : []
+                pros: Array.isArray(raw.pros) ? raw.pros : [],
+                cons: Array.isArray(raw.cons) ? raw.cons : [],
+                warnings: raw.warning_flag ? ["Potential dietary risk detected"] : [],
+                warning: !!raw.warning_flag
             });
         });
 

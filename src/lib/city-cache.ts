@@ -37,8 +37,10 @@ export async function getCityFromCache(cityName: string): Promise<CachedCity | n
         const exactDoc = await getDoc(doc(db, "cities", normalizedName));
         if (exactDoc.exists()) {
             const data = exactDoc.data() as CachedCity;
-            // Increment access count (fire and forget)
-            setDoc(doc(db, "cities", normalizedName), { accessCount: (data.accessCount || 0) + 1 }, { merge: true });
+            // Increment access count (fire and forget - don't fail read if write fails)
+            setDoc(doc(db, "cities", normalizedName), { accessCount: (data.accessCount || 0) + 1 }, { merge: true })
+                .catch(e => console.warn("[CityCache] Failed to update access count:", e));
+
             return { ...data, id: exactDoc.id };
         }
 

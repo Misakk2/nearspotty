@@ -69,7 +69,7 @@ export async function GET(request: NextRequest) {
             headers: {
                 "Content-Type": "application/json",
                 "X-Goog-Api-Key": API_KEY,
-                "X-Goog-FieldMask": "places.name,places.id,places.types,places.priceLevel,places.rating,places.userRatingCount"
+                "X-Goog-FieldMask": "places.displayName,places.id,places.types,places.priceLevel,places.rating,places.userRatingCount,places.formattedAddress,places.location"
             },
             body: JSON.stringify(broadBody)
         });
@@ -87,26 +87,59 @@ export async function GET(request: NextRequest) {
         // We need: editorialSummary, reviews, servesVegetarianFood, websiteUri
         const deepPromises = candidates.map(async (p: any) => {
             const detailsEndpoint = `https://places.googleapis.com/v1/places/${p.id}`;
-            const fields = "editorialSummary,reviews,servesVegetarianFood,websiteUri";
+            const fields = "editorialSummary,reviews,servesVegetarianFood,websiteUri,photos"; // Note: we already have address/location from broad fetch
 
             const detailRes = await fetch(`${detailsEndpoint}?fields=${fields}&key=${API_KEY}`);
             const detailData = await detailRes.json();
 
+            // Merge detailData into p if needed, but Google Places Deep Fetch returns separate object.
+            // Actually, we use 'p' (candidate) for basic info and 'detailRes' for enrichment.
+            // But wait! 'p' has 'photos' ONLY if we ask for it in Broad Fetch OR if detailData has it.
+            // Broad Fetch field mask does NOT include photos. So p.photos is undefined?
+            // Yes! p.photos is undefined in broad fetch if not requested.
+            // Detail Fetch requests 'photos'. So we should use detailData.photos!
+
+            // Correction: detailData holds the *new* fields.
+            // Let's use detailData for photos.
+            const photos = (await detailData).photos || [];
+
+            // Map photos (New API format) -> Usable URL
+            const photoUrl = photos?.[0]?.name
+                ? `https://places.googleapis.com/v1/${photos[0].name}/media?maxHeightPx=400&maxWidthPx=400&key=${API_KEY}`
+                : null;
+
+            const primaryType = p.types?.[0] || 'restaurant';
+            const placeName = p.displayName?.text || p.name || "Place"; // Use displayName.text (New API) or name (Legacy/Fallback)
+            const fallbackImage = `https://placehold.co/600x400/orange/white?text=${encodeURIComponent(placeName)}`;
+
             return {
                 place_id: p.id,
-                name: p.name.text,
+                name: placeName,
                 types: p.types,
                 rating: p.rating,
-                price_level: p.priceLevel ? (p.priceLevel === "PRICE_LEVEL_EXPENSIVE" ? 3 : 2) : 1,
+                user_ratings_total: p.userRatingCount,
+                price_level: p.priceLevel ? (p.priceLevel === "PRICE_LEVEL_EXPENSIVE" ? 3 : (p.priceLevel === "PRICE_LEVEL_MODERATE" ? 2 : 1)) : 1,
+                formatted_address: p.formattedAddress,
+                vicinity: p.formattedAddress, // Fallback for legacy
+                geometry: {
+                    location: {
+                        lat: p.location?.latitude || 0,
+                        lng: p.location?.longitude || 0
+                    }
+                },
                 // Normalize editorialSummary
-                editorialSummary: p.editorialSummary?.text || p.editorialSummary,
+                editorialSummary: (await detailData).editorialSummary?.text || (await detailData).editorialSummary,
                 // Normalize reviews (Google Places v1 returns { text: { text: "...", languageCode: "en" } })
-                reviews: p.reviews?.map((r: any) => ({
+                reviews: (await detailData).reviews?.map((r: any) => ({
                     ...r,
                     text: r.text?.text || r.text // Extract inner text if object, else keep as is
                 })) || [],
-                websiteUri: p.websiteUri,
-                servesVegetarianFood: p.servesVegetarianFood
+                websiteUri: (await detailData).websiteUri,
+                servesVegetarianFood: (await detailData).servesVegetarianFood,
+                photoUrl: photoUrl || fallbackImage, // Legacy field
+                imageSrc: photoUrl || fallbackImage, // REQUIRED FIELD
+                photos: photos || [],
+                fallbackImageCategory: primaryType
             };
         });
 

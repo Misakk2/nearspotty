@@ -8,6 +8,7 @@
  */
 
 import { adminDb } from "@/lib/firebase-admin";
+import { FieldValue } from "firebase-admin/firestore";
 import { DINER_LIMITS } from "@/lib/plan-limits";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
@@ -113,10 +114,11 @@ export async function incrementAIUsage(userId: string): Promise<void> {
     }
 
     const userData = userDoc.data()!;
-    const currentCount = userData.usage?.count || 0;
 
+    // Use atomic increment to prevent race conditions
     await userRef.update({
-        'usage.count': currentCount + 1,
+        'usage.count': FieldValue.increment(1),
+        // We only inadvertently update this if it's missing, but increment handles the counter atomically
         'usage.lastResetDate': userData.usage?.lastResetDate || new Date().toISOString()
     });
 }

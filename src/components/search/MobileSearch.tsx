@@ -31,6 +31,7 @@ interface MobileSearchProps {
     onUseLocation: () => void;
     onPlaceSelect: (id: string) => void;
     userLocation?: { lat: number; lng: number } | null;
+    onClear: () => void;
 }
 
 const LOADING_MESSAGES = [
@@ -59,7 +60,8 @@ export default function MobileSearch({
     subscriptionTier,
     onUseLocation,
     onPlaceSelect,
-    userLocation
+    userLocation,
+    onClear
 }: MobileSearchProps) {
     const [isExpanded, setIsExpanded] = useState(false);
     const [isProfileOpen, setIsProfileOpen] = useState(false);
@@ -231,6 +233,19 @@ export default function MobileSearch({
                                 className="w-full h-12 pl-11 pr-12 rounded-2xl bg-gray-100 border-none focus:ring-2 focus:ring-primary/20 focus:bg-white transition-all text-sm font-medium"
                                 onFocus={() => setIsExpanded(true)}
                             />
+                            {searchQuery && (
+                                <button
+                                    type="button"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        setSearchQuery("");
+                                        onClear();
+                                    }}
+                                    className="absolute right-12 top-1/2 -translate-y-1/2 p-1.5 rounded-full hover:bg-gray-200 text-gray-500 transition-colors"
+                                >
+                                    <X className="h-4 w-4" />
+                                </button>
+                            )}
                             <Button
                                 type="submit"
                                 size="icon"

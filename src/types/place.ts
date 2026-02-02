@@ -16,6 +16,9 @@ export interface Place {
         height: number;
         width: number;
     }[];
+    imageSrc: string; // Mandatory (fallback if needed)
+    photoUrl?: string; // New V1 API Valid URL
+    fallbackImageCategory?: string; // e.g., "restaurant", "cafe" for determining icon/color if image keeps failing
     opening_hours?: {
         open_now: boolean;
         weekday_text?: string[];

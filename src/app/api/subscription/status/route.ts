@@ -1,17 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import Stripe from "stripe";
 import { adminAuth, adminDb } from "@/lib/firebase-admin";
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-    apiVersion: "2026-01-28.clover",
-});
-
-function toSafeISOString(timestamp: number | null | undefined): string {
-    if (!timestamp) return new Date().toISOString();
-    const date = new Date(timestamp * 1000);
-    return !isNaN(date.getTime()) ? date.toISOString() : new Date().toISOString();
-}
-
 /**
  * Subscription Status API
  * 
@@ -60,60 +48,15 @@ export async function GET(request: NextRequest) {
         const limit = tier === "premium" ? Infinity : 5;
         const remaining = tier === "premium" ? Infinity : Math.max(0, 5 - usage.count);
 
-        // --- 3. Fetch Real-time Stripe Data if Customer Exists ---
-        let stripeSubscription = null;
-        if (userData.stripeCustomerId) {
-            try {
-                const subscriptions = await stripe.subscriptions.list({
-                    customer: userData.stripeCustomerId,
-                    status: "all",
-                    limit: 1,
-                });
+        // --- 3. Determine Display Status (Firestore Only) ---
+        // We rely on Webhooks to keep Firestore in sync.
+        // This removes the latency of fetching from Stripe on every request.
 
-                if (subscriptions.data.length > 0) {
-                    const sub = subscriptions.data[0];
-                    // Type assertion for Stripe properties
-                    const subData = sub as unknown as {
-                        id: string;
-                        status: string;
-                        cancel_at_period_end: boolean;
-                        cancel_at: number | null;
-                        current_period_end: number;
-                        current_period_start: number;
-                    };
-                    stripeSubscription = {
-                        id: subData.id,
-                        status: subData.status,
-                        cancelAtPeriodEnd: subData.cancel_at_period_end,
-                        cancelAt: subData.cancel_at ? new Date(subData.cancel_at * 1000).toISOString() : null,
-                        currentPeriodEnd: toSafeISOString(subData.current_period_end),
-                        currentPeriodStart: toSafeISOString(subData.current_period_start),
-                    };
-                }
-            } catch (stripeError) {
-                console.error("[subscription/status] Stripe fetch error:", stripeError);
-                // Continue with Firestore data only
-            }
-        }
-
-        // --- 4. Determine Display Status ---
         // Prioritize nested subscription object, fall back to legacy fields
-        let subscriptionStatus = userData.subscription?.status || userData.subscriptionStatus || "none";
-        let cancelAtPeriodEnd = userData.subscription?.cancel_at_period_end ?? userData.cancelAtPeriodEnd ?? false;
-        let currentPeriodEnd = userData.subscription?.current_period_end || userData.currentPeriodEnd;
-        let cancelAt = userData.subscription?.cancel_at || userData.cancelAt;
-
-        // Sync with fresh Stripe data if available (truth source)
-        if (stripeSubscription) {
-            if (stripeSubscription.id) {
-                // Logic to prioritize stripe regarding status?
-                // Generally we trust Firestore if webhook is working, but for status check API, checking Stripe directly is safer.
-                subscriptionStatus = stripeSubscription.status;
-                cancelAtPeriodEnd = stripeSubscription.cancelAtPeriodEnd;
-                currentPeriodEnd = stripeSubscription.currentPeriodEnd;
-                cancelAt = stripeSubscription.cancelAt;
-            }
-        }
+        const subscriptionStatus = userData.subscription?.status || userData.subscriptionStatus || "none";
+        const cancelAtPeriodEnd = userData.subscription?.cancel_at_period_end ?? userData.cancelAtPeriodEnd ?? false;
+        const currentPeriodEnd = userData.subscription?.current_period_end || userData.currentPeriodEnd;
+        const cancelAt = userData.subscription?.cancel_at || userData.cancelAt;
 
         let displayStatus = subscriptionStatus;
         if (cancelAtPeriodEnd && subscriptionStatus === "active") {
@@ -123,10 +66,10 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({
             tier,
             status: displayStatus,
-            stripeSubscription,
-            currentPeriodEnd: currentPeriodEnd || stripeSubscription?.currentPeriodEnd,
-            cancelAtPeriodEnd: cancelAtPeriodEnd || stripeSubscription?.cancelAtPeriodEnd || false,
-            cancelAt: cancelAt || stripeSubscription?.cancelAt,
+            stripeSubscription: null, // Removed for performance
+            currentPeriodEnd: currentPeriodEnd,
+            cancelAtPeriodEnd: cancelAtPeriodEnd,
+            cancelAt: cancelAt,
             usage: {
                 count: usage.count,
                 remaining,

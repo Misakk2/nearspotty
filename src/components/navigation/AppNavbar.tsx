@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/components/auth-provider";
+import { PremiumBadge } from "@/components/ui/PremiumBadge";
 import { Button } from "@/components/ui/button";
 import { Utensils, LayoutDashboard, User, Search, LogOut, ChevronRight, Menu, X, Calendar, Globe, MapPin } from "lucide-react";
 import { auth } from "@/lib/firebase";
@@ -13,6 +14,7 @@ import { useI18n } from "@/components/i18n-provider";
 
 export default function AppNavbar() {
     const pathname = usePathname();
+    const router = useRouter();
     const { locale, setLocale } = useI18n();
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
@@ -55,7 +57,7 @@ export default function AppNavbar() {
                 e.preventDefault();
                 if (searchQuery.trim()) {
                     // Navigate to search page with query parameter
-                    window.location.href = `/search?keyword=${encodeURIComponent(searchQuery)}`;
+                    router.push(`/search?keyword=${encodeURIComponent(searchQuery)}`);
                 }
             }} className="flex-1 max-w-xl mx-8 relative group">
                 <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
@@ -76,7 +78,7 @@ export default function AppNavbar() {
                 className="hidden md:flex gap-2 mr-4 rounded-full border-gray-200 hover:border-primary hover:text-primary transition-colors"
                 onClick={() => {
                     // Redirect to search with action flag
-                    window.location.href = "/search?action=use_location";
+                    router.push("/search?action=use_location");
                 }}
             >
                 <MapPin className="h-4 w-4" />
@@ -128,9 +130,9 @@ export default function AppNavbar() {
                                         <p className="font-bold text-gray-900 truncate">{user.displayName || "User"}</p>
                                         <p className="text-xs text-gray-500 truncate">{user.email}</p>
                                         {subscriptionTier === 'premium' ? (
-                                            <span className="inline-block mt-2 text-[10px] bg-gradient-to-r from-amber-400 to-yellow-500 text-white px-2 py-0.5 rounded-full font-bold uppercase tracking-wider shadow-sm">
-                                                Premium Member
-                                            </span>
+                                            <div className="mt-2">
+                                                <PremiumBadge size="sm" />
+                                            </div>
                                         ) : (
                                             <Link href="/subscription" className="inline-block mt-2">
                                                 <span className="text-[10px] bg-gray-100 text-gray-600 hover:bg-gray-200 px-2 py-0.5 rounded-full font-bold uppercase tracking-wider cursor-pointer transition-colors">

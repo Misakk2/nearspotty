@@ -18,6 +18,7 @@ export interface GeminiScore {
     cons: string[];            // User-specific disadvantages  
     recommendedDish: string;   // Single best dish recommendation
     warnings: string[];        // Dietary/allergy warnings
+    warning?: boolean;         // Critical warning flag (e.g. cross-contamination)
 }
 
 /**

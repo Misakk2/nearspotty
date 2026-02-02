@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Utensils, LayoutDashboard, User, Search, LogOut, ChevronRight, Menu, X, Calendar, Globe } from "lucide-react";
@@ -13,6 +13,7 @@ import { useI18n } from "@/components/i18n-provider";
 
 export default function Navbar() {
     const pathname = usePathname();
+    const router = useRouter(); // Added router
     const { locale, setLocale } = useI18n();
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
     const { user, userRole, subscriptionTier } = useAuth();
@@ -23,7 +24,7 @@ export default function Navbar() {
         try {
             await signOut(auth);
             toast.success("Logged out successfully");
-            window.location.href = "/";
+            router.push("/");
         } catch (error) {
             console.error("Logout error details:", error);
             toast.error("Failed to log out. Please refresh the page.");

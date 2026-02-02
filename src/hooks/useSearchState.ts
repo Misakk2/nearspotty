@@ -1,10 +1,10 @@
-import { useQueryClient, useQuery, useMutation } from "@tanstack/react-query";
-import { useCallback } from "react";
+import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import { Place } from "@/types/place";
 import { GeminiScore } from "@/types";
 
 /**
- * Search state persisted in React Query cache
+ * Search state persisted in localStorage via Zustand
  */
 export interface SearchState {
     places: Place[];
@@ -14,10 +14,24 @@ export interface SearchState {
     cityName: string | null;
     selectedCategory: string | null;
     scrollPosition: number;
+    searchQuery: string;
+    isLoading: boolean;
+
+    // Actions
+    setPlaces: (places: Place[], scores?: Record<string, GeminiScore>) => void;
+    updateScores: (newScores: Record<string, GeminiScore>) => void;
+    setLocation: (location: { lat: number; lng: number; cityId?: string; cityName?: string }) => void;
+    setCity: (city: { id: string; name: string; lat: number; lng: number }) => void;
+    setCategory: (category: string | null) => void;
+    setSearchQuery: (query: string) => void;
+    setLoading: (loading: boolean) => void;
+    saveScrollPosition: (position: number) => void;
+    startSearch: () => void;
+    resetSearch: () => void;
+    resetState: () => void;
 }
 
-const SEARCH_STATE_KEY = ["search", "state"];
-const DEFAULT_STATE: SearchState = {
+const DEFAULT_STATE = {
     places: [],
     scores: {},
     center: { lat: 48.1486, lng: 17.1077 }, // Bratislava default
@@ -25,143 +39,122 @@ const DEFAULT_STATE: SearchState = {
     cityName: "Bratislava",
     selectedCategory: null,
     scrollPosition: 0,
+    searchQuery: "",
+    isLoading: false,
 };
 
-/**
- * useSearchState - Hook for managing search state with React Query
- * 
- * Provides:
- * - Automatic cache persistence across navigation
- * - State restoration on back navigation
- * - Methods to update individual state fields
- * 
- * @example
- * ```tsx
- * const { state, setPlaces, setLocation, setCategory, saveScrollPosition } = useSearchState();
- * ```
- */
-export function useSearchState() {
-    const queryClient = useQueryClient();
+export const useSearchStore = create<SearchState>()(
+    persist(
+        (set) => ({
+            ...DEFAULT_STATE,
 
-    // Get current state from cache (or initial if empty)
-    const { data: state = DEFAULT_STATE } = useQuery({
-        queryKey: SEARCH_STATE_KEY,
-        queryFn: () => DEFAULT_STATE,
-        staleTime: Infinity, // Never mark as stale - this is client state
-        gcTime: 30 * 60 * 1000, // Keep for 30 minutes
-    });
-
-    /**
-     * Update search state in cache
-     */
-    const updateState = useCallback(
-        (updates: Partial<SearchState>) => {
-            queryClient.setQueryData<SearchState>(SEARCH_STATE_KEY, (prev) => ({
-                ...prev,
-                ...DEFAULT_STATE,
-                ...updates,
-            }));
-        },
-        [queryClient]
-    );
-
-    /**
-     * Set places and optionally scores
-     */
-    const setPlaces = useCallback(
-        (places: Place[], scores?: Record<string, GeminiScore>) => {
-            queryClient.setQueryData<SearchState>(SEARCH_STATE_KEY, (prev) => ({
-                ...(prev ?? DEFAULT_STATE),
+            setPlaces: (places, scores) => set((state) => ({
                 places,
-                ...(scores && { scores: { ...(prev?.scores ?? {}), ...scores } }),
-            }));
-        },
-        [queryClient]
-    );
+                scores: scores ? { ...state.scores, ...scores } : state.scores,
+                isLoading: false
+            })),
 
-    /**
-     * Update scores for places
-     */
-    const updateScores = useCallback(
-        (newScores: Record<string, GeminiScore>) => {
-            queryClient.setQueryData<SearchState>(SEARCH_STATE_KEY, (prev) => ({
-                ...(prev ?? DEFAULT_STATE),
-                scores: { ...(prev?.scores ?? {}), ...newScores },
-            }));
-        },
-        [queryClient]
-    );
+            updateScores: (newScores) => set((state) => ({
+                scores: { ...state.scores, ...newScores }
+            })),
 
-    /**
-     * Set location (center, cityId, cityName)
-     */
-    const setLocation = useCallback(
-        (location: { lat: number; lng: number; cityId?: string; cityName?: string }) => {
-            queryClient.setQueryData<SearchState>(SEARCH_STATE_KEY, (prev) => ({
-                ...(prev ?? DEFAULT_STATE),
+            setLocation: (location) => set((state) => ({
                 center: { lat: location.lat, lng: location.lng },
                 ...(location.cityId && { cityId: location.cityId }),
-                ...(location.cityName && { cityName: location.cityName }),
-            }));
-        },
-        [queryClient]
-    );
+                ...(location.cityName && { cityName: location.cityName })
+            })),
 
-    /**
-     * Set selected category
-     */
-    const setCategory = useCallback(
-        (category: string | null) => {
-            queryClient.setQueryData<SearchState>(SEARCH_STATE_KEY, (prev) => ({
-                ...(prev ?? DEFAULT_STATE),
-                selectedCategory: category,
-            }));
-        },
-        [queryClient]
-    );
+            setCity: (city) => set({
+                cityId: city.id,
+                cityName: city.name,
+                center: { lat: city.lat, lng: city.lng },
+                places: [], // Clear places on city change
+                scores: {},
+                selectedCategory: null, // Optional: Clear category on city change? User said "UI must react without a reload". Clearing specific results is key.
+                isLoading: false
+            }),
 
-    /**
-     * Save scroll position before navigation
-     */
-    const saveScrollPosition = useCallback(
-        (position: number) => {
-            queryClient.setQueryData<SearchState>(SEARCH_STATE_KEY, (prev) => ({
-                ...(prev ?? DEFAULT_STATE),
-                scrollPosition: position,
-            }));
-        },
-        [queryClient]
-    );
+            setCategory: (category) => set({ selectedCategory: category }),
 
-    /**
-     * Clear search results while keeping location
-     */
-    const clearResults = useCallback(() => {
-        queryClient.setQueryData<SearchState>(SEARCH_STATE_KEY, (prev) => ({
-            ...(prev ?? DEFAULT_STATE),
-            places: [],
-            scores: {},
-            selectedCategory: null,
-            scrollPosition: 0,
-        }));
-    }, [queryClient]);
+            setSearchQuery: (query) => set({ searchQuery: query }),
 
-    /**
-     * Reset all state to defaults
-     */
-    const resetState = useCallback(() => {
-        queryClient.setQueryData<SearchState>(SEARCH_STATE_KEY, DEFAULT_STATE);
-    }, [queryClient]);
+            setLoading: (loading) => set({ isLoading: loading }),
+
+            saveScrollPosition: (position) => set({ scrollPosition: position }),
+
+            startSearch: () => set({
+                places: [],
+                scores: {},
+                isLoading: true
+            }),
+
+            // Wipes query, places, and filters (Clean Slate)
+            resetSearch: () => set((state) => ({
+                places: [],
+                scores: {},
+                selectedCategory: null,
+                searchQuery: "",
+                isLoading: false,
+                scrollPosition: 0
+            })),
+
+            resetState: () => set(DEFAULT_STATE),
+        }),
+        {
+            name: 'search-storage',
+            storage: createJSONStorage(() => localStorage),
+            version: 1, // Bump this to invalidate old cache
+            migrate: (persistedState: any, version: number) => {
+                if (version === 0) {
+                    // if the stored value is in version 0, we clear it (return default)
+                    return DEFAULT_STATE;
+                }
+                return persistedState as SearchState;
+            },
+            partialize: (state) => ({
+                // Persist these fields
+                places: state.places,
+                scores: state.scores,
+                center: state.center,
+                cityId: state.cityId,
+                cityName: state.cityName,
+                selectedCategory: state.selectedCategory,
+                scrollPosition: state.scrollPosition,
+                searchQuery: state.searchQuery
+            }),
+        }
+    )
+);
+
+/**
+ * Adapter hook to maintain backward compatibility
+ */
+export function useSearchState() {
+    const store = useSearchStore();
 
     return {
-        state,
-        updateState,
-        setPlaces,
-        updateScores,
-        setLocation,
-        setCategory,
-        saveScrollPosition,
-        clearResults,
-        resetState,
+        state: {
+            places: store.places,
+            scores: store.scores,
+            center: store.center,
+            cityId: store.cityId,
+            cityName: store.cityName,
+            selectedCategory: store.selectedCategory,
+            scrollPosition: store.scrollPosition,
+            searchQuery: store.searchQuery,
+            isLoading: store.isLoading,
+        },
+        setPlaces: store.setPlaces,
+        updateScores: store.updateScores,
+        setLocation: store.setLocation,
+        setCity: store.setCity,
+        setCategory: store.setCategory,
+        setSearchQuery: store.setSearchQuery,
+        setLoading: store.setLoading,
+        startSearch: store.startSearch, // NEW ACTION
+        saveScrollPosition: store.saveScrollPosition,
+        clearResults: store.resetSearch, // Alias for backward compat if needed, or update consumers
+        resetSearch: store.resetSearch,
+        resetState: store.resetState,
     };
 }
