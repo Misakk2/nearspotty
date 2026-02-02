@@ -14,12 +14,15 @@ import { ReservationModal } from "@/components/reservation/reservation-modal";
 import { MatchScoreBadge } from "@/components/search/MatchScoreBadge";
 import { CommunicativeLoader } from "@/components/ui/CommunicativeLoader";
 import toast from "react-hot-toast";
-import FsLightbox from "fslightbox-react";
+import PlaceLightbox from "@/components/search/PlaceLightbox";
 
 // Helper to safely get photo URL
-const getPhotoUrl = (photoReference?: string) => {
-    if (!photoReference) return null;
-    return `https://maps.googleapis.com/maps/api/place/photo?maxwidth=800&photoreference=${photoReference}&key=${process.env.NEXT_PUBLIC_GOOGLE_PLACES_KEY}`;
+const getPhotoUrl = (photo: any) => {
+    if (photo?.url) return photo.url;
+    if (photo?.photo_reference) {
+        return `https://maps.googleapis.com/maps/api/place/photo?maxwidth=800&photoreference=${photo.photo_reference}&key=${process.env.NEXT_PUBLIC_GOOGLE_PLACES_KEY}`;
+    }
+    return null;
 };
 
 export default function PlaceDetailPage() {
@@ -126,7 +129,7 @@ export default function PlaceDetailPage() {
 
     if (!place) return <div className="p-8 text-center text-muted-foreground">Place not found</div>;
 
-    const mainPhoto = place.photos?.[0]?.photo_reference ? getPhotoUrl(place.photos[0].photo_reference) : null;
+    const mainPhoto = place.photos?.[0] ? getPhotoUrl(place.photos[0]) : null;
     const additionalPhotos = place.photos?.slice(1) || [];
 
     return (
@@ -370,7 +373,7 @@ export default function PlaceDetailPage() {
                                 >
                                     {/* eslint-disable-next-line @next/next/no-img-element */}
                                     <img
-                                        src={getPhotoUrl(photo.photo_reference) || ""}
+                                        src={getPhotoUrl(photo) || ""}
                                         alt={`Photo ${i}`}
                                         className="w-full h-full object-cover transition-transform group-hover:scale-105"
                                     />
@@ -379,10 +382,10 @@ export default function PlaceDetailPage() {
                                 <p className="col-span-full text-center py-10 text-muted-foreground">No additional photos available.</p>
                             )}
                         </div>
-                        <FsLightbox
-                            toggler={lightboxController}
-                            slide={lightboxSlide}
-                            sources={additionalPhotos.map(p => getPhotoUrl(p.photo_reference) || "")}
+                        <PlaceLightbox
+                            isOpen={lightboxController}
+                            initialIndex={lightboxSlide - 1} // 0-based index for logic, component handles slide mapping
+                            images={additionalPhotos.map(p => getPhotoUrl(p) || "")}
                         />
 
                         {/* TAB CONTENT: REVIEWS */}

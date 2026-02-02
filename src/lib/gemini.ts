@@ -4,6 +4,28 @@ import { GeminiScore } from "@/types";
 const genAI = new GoogleGenerativeAI(process.env.NEXT_PUBLIC_GEMINI_API_KEY || "");
 const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" }); // Using Flash for speed
 
+/**
+ * Helper: Retry operation with exponential backoff
+ */
+async function retryOperation<T>(operation: () => Promise<T>, maxRetries: number = 3, delayMs: number = 1000): Promise<T> {
+    let lastError: any;
+    for (let i = 0; i < maxRetries; i++) {
+        try {
+            return await operation();
+        } catch (error: any) {
+            lastError = error;
+            // Retry only on 503 (Overloaded) or 429 (Rate Limit) or network errors
+            const isRetryable = error.status === 503 || error.status === 429 || error.message?.includes('fetch') || error.message?.includes('network');
+            if (!isRetryable) throw error;
+
+            console.warn(`[Gemini] Attempt ${i + 1} failed. Retrying in ${delayMs}ms...`);
+            await new Promise(resolve => setTimeout(resolve, delayMs));
+            delayMs *= 2; // Exponential backoff
+        }
+    }
+    throw lastError;
+}
+
 export interface PlaceForScoring {
     place_id: string;
     name: string;
@@ -54,7 +76,7 @@ Output Schema:
 `;
 
     try {
-        const result = await model.generateContent(prompt);
+        const result = await retryOperation(() => model.generateContent(prompt));
         const response = await result.response;
         const text = response.text();
         const jsonStr = text.replace(/```json\n?|\n?```/g, "").trim();
@@ -123,7 +145,7 @@ Output Requirements:
 `;
 
     try {
-        const result = await model.generateContent(prompt);
+        const result = await retryOperation(() => model.generateContent(prompt));
         const response = await result.response;
         const text = response.text();
         const jsonStr = text.replace(/```json\n?|\n?```/g, "").trim();

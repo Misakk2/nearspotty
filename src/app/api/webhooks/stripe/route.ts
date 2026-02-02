@@ -31,6 +31,16 @@ export async function POST(request: Request) {
 
     console.log(`[Stripe Webhook] ➡️  Event Type: ${event.type}`);
 
+    // --- IDEMPOTENCY CHECK ---
+    const eventRef = adminDb.collection('webhook_events').doc(event.id);
+    const eventDoc = await eventRef.get();
+    if (eventDoc.exists) {
+        console.log(`[Stripe Webhook] ⚠️ Event ${event.id} already processed. Skipping.`);
+        return NextResponse.json({ received: true });
+    }
+    await eventRef.set({ processedAt: new Date().toISOString(), type: event.type });
+    // -------------------------
+
     // Handle checkout.session.completed - immediate upgrade
     if (event.type === "checkout.session.completed") {
         try {

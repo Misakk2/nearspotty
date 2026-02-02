@@ -8,10 +8,11 @@ import { scorePlacesWithDeepContext, PlaceWithContext } from "@/lib/gemini";
  * Deep Search API Route - The "Dietary Engine"
  * 
  * Orchestrates the full AI pipeline:
- * 1. Broad Fetch (Google Places)
- * 2. Deep Enrichment (Fetch Details parallel)
- * 3. Pre-processing (Review filtering)
- * 4. Batch AI Scoring (Gemini)
+ * 1. Caching Layer (Google Data)
+ * 2. Broad Fetch (Google Places)
+ * 3. Deep Enrichment (Fetch Details parallel - Optimized)
+ * 4. Pre-processing (Review filtering)
+ * 5. Batch AI Scoring (Gemini) with Fallback
  */
 export async function GET(request: NextRequest) {
     console.log("[Deep Search] Request received");
@@ -49,105 +50,159 @@ export async function GET(request: NextRequest) {
     const radius = parseFloat(searchParams.get("radius") || "3000"); // Default 3km
     const keyword = searchParams.get("keyword") || "restaurant";
 
-    // --- 3. Broad Fetch (Google Places v1) ---
-    const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_PLACES_KEY;
-    if (!API_KEY) return NextResponse.json({ error: "Server Config Error" }, { status: 500 });
-
+    // --- 3. Google Data Acquisition (Cache First) ---
     try {
-        const broadEndpoint = "https://places.googleapis.com/v1/places:searchNearby";
-        const broadBody = {
-            includedTypes: ["restaurant", "cafe", "bakery"], // Broad categories
-            locationRestriction: {
-                circle: { center: { latitude: lat, longitude: lng }, radius: radius }
-            },
-            maxResultCount: 20 // Fetch 20, we will deep process top 10
-        };
+        // Round coordinates to 3 decimal places (~100m precision) to increase cache hit rate
+        const latKey = parseFloat(lat.toFixed(3));
+        const lngKey = parseFloat(lng.toFixed(3));
 
-        console.log("[Deep Search] Fetching Broad Candidates from:", broadEndpoint);
-        const broadRes = await fetch(broadEndpoint, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "X-Goog-Api-Key": API_KEY,
-                "X-Goog-FieldMask": "places.displayName,places.id,places.types,places.priceLevel,places.rating,places.userRatingCount,places.formattedAddress,places.location"
-            },
-            body: JSON.stringify(broadBody)
+        // Generate Cache Key for GOOGLE DATA (User agnostic)
+        const googleCacheKey = createCacheKey({
+            type: "google_places",
+            lat: latKey,
+            lng: lngKey,
+            radius,
+            keyword
         });
 
-        const broadData = await broadRes.json();
-        if (!broadData.places) return NextResponse.json({ results: [] });
+        let enrichedPlaces: PlaceWithContext[] | null = await getCache<PlaceWithContext[]>("places_cache", googleCacheKey);
 
-        // Filter: Basic Hard Filters (e.g. must have rating > 3.0)
-        let candidates = broadData.places.filter((p: any) => (p.rating || 0) >= 3.5);
+        if (enrichedPlaces) {
+            console.log(`[Deep Search] 🟢 Cache HIT for ${googleCacheKey}`);
+        } else {
+            console.log(`[Deep Search] 🔴 Cache MISS for ${googleCacheKey} - Fetching from Google...`);
 
-        // Limit to Top 10 for Deep Fetch to save cost/latency
-        candidates = candidates.slice(0, 10);
+            const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_PLACES_KEY;
+            if (!API_KEY) return NextResponse.json({ error: "Server Config Error" }, { status: 500 });
 
-        // --- 4. Deep Fetch (Parellel Details) ---
-        // We need: editorialSummary, reviews, servesVegetarianFood, websiteUri
-        const deepPromises = candidates.map(async (p: any) => {
-            const detailsEndpoint = `https://places.googleapis.com/v1/places/${p.id}`;
-            const fields = "editorialSummary,reviews,servesVegetarianFood,websiteUri,photos"; // Note: we already have address/location from broad fetch
-
-            const detailRes = await fetch(`${detailsEndpoint}?fields=${fields}&key=${API_KEY}`);
-            const detailData = await detailRes.json();
-
-            // Merge detailData into p if needed, but Google Places Deep Fetch returns separate object.
-            // Actually, we use 'p' (candidate) for basic info and 'detailRes' for enrichment.
-            // But wait! 'p' has 'photos' ONLY if we ask for it in Broad Fetch OR if detailData has it.
-            // Broad Fetch field mask does NOT include photos. So p.photos is undefined?
-            // Yes! p.photos is undefined in broad fetch if not requested.
-            // Detail Fetch requests 'photos'. So we should use detailData.photos!
-
-            // Correction: detailData holds the *new* fields.
-            // Let's use detailData for photos.
-            const photos = (await detailData).photos || [];
-
-            // Map photos (New API format) -> Usable URL
-            const photoUrl = photos?.[0]?.name
-                ? `https://places.googleapis.com/v1/${photos[0].name}/media?maxHeightPx=400&maxWidthPx=400&key=${API_KEY}`
-                : null;
-
-            const primaryType = p.types?.[0] || 'restaurant';
-            const placeName = p.displayName?.text || p.name || "Place"; // Use displayName.text (New API) or name (Legacy/Fallback)
-            const fallbackImage = `https://placehold.co/600x400/orange/white?text=${encodeURIComponent(placeName)}`;
-
-            return {
-                place_id: p.id,
-                name: placeName,
-                types: p.types,
-                rating: p.rating,
-                user_ratings_total: p.userRatingCount,
-                price_level: p.priceLevel ? (p.priceLevel === "PRICE_LEVEL_EXPENSIVE" ? 3 : (p.priceLevel === "PRICE_LEVEL_MODERATE" ? 2 : 1)) : 1,
-                formatted_address: p.formattedAddress,
-                vicinity: p.formattedAddress, // Fallback for legacy
-                geometry: {
-                    location: {
-                        lat: p.location?.latitude || 0,
-                        lng: p.location?.longitude || 0
-                    }
+            // A. Broad Fetch
+            const broadEndpoint = "https://places.googleapis.com/v1/places:searchNearby";
+            const broadBody = {
+                includedTypes: ["restaurant", "cafe", "bakery"],
+                locationRestriction: {
+                    circle: { center: { latitude: lat, longitude: lng }, radius: radius }
                 },
-                // Normalize editorialSummary
-                editorialSummary: (await detailData).editorialSummary?.text || (await detailData).editorialSummary,
-                // Normalize reviews (Google Places v1 returns { text: { text: "...", languageCode: "en" } })
-                reviews: (await detailData).reviews?.map((r: any) => ({
-                    ...r,
-                    text: r.text?.text || r.text // Extract inner text if object, else keep as is
-                })) || [],
-                websiteUri: (await detailData).websiteUri,
-                servesVegetarianFood: (await detailData).servesVegetarianFood,
-                photoUrl: photoUrl || fallbackImage, // Legacy field
-                imageSrc: photoUrl || fallbackImage, // REQUIRED FIELD
-                photos: photos || [],
-                fallbackImageCategory: primaryType
+                maxResultCount: 20
             };
-        });
 
-        console.log(`[Deep Search] Fetching details for ${deepPromises.length} candidates...`);
-        const enrichedPlaces: PlaceWithContext[] = await Promise.all(deepPromises);
-        console.log("[Deep Search] Details fetched");
+            const broadRes = await fetch(broadEndpoint, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-Goog-Api-Key": API_KEY,
+                    "X-Goog-FieldMask": "places.displayName,places.id,places.types,places.priceLevel,places.rating,places.userRatingCount,places.formattedAddress,places.location"
+                },
+                body: JSON.stringify(broadBody)
+            });
 
-        // --- 5. Pre-processing (Review Filtering) ---
+            const broadData = await broadRes.json();
+            if (!broadData.places) return NextResponse.json({ results: [] });
+
+            // Filter: Basic Hard Filters
+            let candidates = broadData.places.filter((p: any) => (p.rating || 0) >= 3.5);
+            candidates = candidates.slice(0, 20); // Keep top 20 relevant
+
+            // B. Optimized Deep Fetch (Top 5 Only)
+            // We split candidates into "Top Tier" (Deep Fetch) and "Standard Tier" (Basic Data)
+            const topCandidates = candidates.slice(0, 5);
+            const restCandidates = candidates.slice(5);
+
+            // Fetch details for Top 5
+            const deepPromises = topCandidates.map(async (p: any) => {
+                const detailsEndpoint = `https://places.googleapis.com/v1/places/${p.id}`;
+                const fields = "editorialSummary,reviews,servesVegetarianFood,websiteUri,photos";
+
+                try {
+                    const detailRes = await fetch(`${detailsEndpoint}?fields=${fields}&key=${API_KEY}`);
+                    const detailData = await detailRes.json();
+
+                    // Helper to safely get photo
+                    const photoUrl = detailData.photos?.[0]?.name
+                        ? `https://places.googleapis.com/v1/${detailData.photos[0].name}/media?maxHeightPx=400&maxWidthPx=400&key=${API_KEY}`
+                        : null;
+
+                    const primaryType = p.types?.[0] || 'restaurant';
+                    const placeName = p.displayName?.text || p.name || "Place";
+                    const fallbackImage = `https://placehold.co/600x400/orange/white?text=${encodeURIComponent(placeName)}`;
+
+                    return {
+                        place_id: p.id,
+                        name: placeName,
+                        types: p.types,
+                        rating: p.rating,
+                        user_ratings_total: p.userRatingCount,
+                        price_level: p.priceLevel ? (p.priceLevel === "PRICE_LEVEL_EXPENSIVE" ? 3 : (p.priceLevel === "PRICE_LEVEL_MODERATE" ? 2 : 1)) : 1,
+                        formatted_address: p.formattedAddress,
+                        vicinity: p.formattedAddress,
+                        geometry: {
+                            location: { lat: p.location?.latitude || 0, lng: p.location?.longitude || 0 }
+                        },
+                        editorialSummary: detailData.editorialSummary?.text || detailData.editorialSummary,
+                        reviews: detailData.reviews?.map((r: any) => ({
+                            ...r,
+                            text: r.text?.text || r.text
+                        })) || [],
+                        websiteUri: detailData.websiteUri,
+                        servesVegetarianFood: detailData.servesVegetarianFood,
+                        photoUrl: photoUrl || fallbackImage,
+                        imageSrc: photoUrl || fallbackImage,
+                        photos: detailData.photos?.map((photo: any) => ({
+                            name: photo.name,
+                            width: photo.widthPx,
+                            height: photo.heightPx,
+                            author_attributions: photo.authorAttributions,
+                            url: `https://places.googleapis.com/v1/${photo.name}/media?maxHeightPx=800&maxWidthPx=800&key=${API_KEY}`
+                        })) || [],
+                        fallbackImageCategory: primaryType
+                    };
+                } catch (err) {
+                    console.error(`Failed deep fetch for ${p.id}`, err);
+                    return null; // Handle individual failure graciously
+                }
+            });
+
+            // Map basic data for the rest (No deep fetch)
+            const basicPlaces = restCandidates.map((p: any) => {
+                const placeName = p.displayName?.text || p.name || "Place";
+                const fallbackImage = `https://placehold.co/600x400/grey/white?text=${encodeURIComponent(placeName)}`;
+
+                return {
+                    place_id: p.id,
+                    name: placeName,
+                    types: p.types,
+                    rating: p.rating,
+                    user_ratings_total: p.userRatingCount,
+                    price_level: p.priceLevel ? (p.priceLevel === "PRICE_LEVEL_EXPENSIVE" ? 3 : (p.priceLevel === "PRICE_LEVEL_MODERATE" ? 2 : 1)) : 1,
+                    formatted_address: p.formattedAddress,
+                    vicinity: p.formattedAddress,
+                    geometry: {
+                        location: { lat: p.location?.latitude || 0, lng: p.location?.longitude || 0 }
+                    },
+                    // Missing deep fields
+                    editorialSummary: undefined,
+                    reviews: [],
+                    websiteUri: undefined,
+                    servesVegetarianFood: undefined,
+                    photoUrl: fallbackImage,
+                    imageSrc: fallbackImage,
+                    photos: [],
+                    fallbackImageCategory: p.types?.[0] || 'restaurant'
+                };
+            });
+
+            console.log(`[Deep Search] Fetching details for Top ${topCandidates.length} candidates...`);
+            const richResults = (await Promise.all(deepPromises)).filter(p => p !== null) as PlaceWithContext[];
+
+            // Combine Rich + Basic
+            enrichedPlaces = [...richResults, ...basicPlaces];
+
+            // Save to Cache (24h)
+            if (enrichedPlaces.length > 0) {
+                await setCache("places_cache", googleCacheKey, enrichedPlaces, 24 * 60 * 60 * 1000);
+                console.log(`[Deep Search] Saved ${enrichedPlaces.length} places to cache`);
+            }
+        }
+
         // Fetch User Preferences
         const userDoc = await adminDb.collection("users").doc(userId).get();
         const preferences = userDoc.data()?.preferences || {};
@@ -192,13 +247,21 @@ export async function GET(request: NextRequest) {
             }
         });
 
-        // --- 6. Batch AI Scoring ---
+        // --- 6. Batch AI Scoring (Robust) ---
         let scoredPlaces = new Map();
-        if (!usageStatus.limitReached) {
+
+        if (!usageStatus.limitReached && enrichedPlaces.length > 0) {
             console.log("[Deep Search] Scoring places with Gemini...");
-            scoredPlaces = await scorePlacesWithDeepContext(enrichedPlaces, preferences);
-            await incrementAIUsage(userId);
-            console.log("[Deep Search] Scoring complete");
+            try {
+                // Only score matching candidates (optimization)
+                scoredPlaces = await scorePlacesWithDeepContext(enrichedPlaces, preferences);
+                await incrementAIUsage(userId);
+                console.log("[Deep Search] Scoring complete");
+            } catch (aiError) {
+                console.error("⚠️ [Deep Search] AI Scoring Failed (Self-Healing active):", aiError);
+                // We proceed without scores (scoredPlaces remains empty)
+                // This prevents the entire search from failing 500
+            }
         }
 
         // --- 7. Formatting Response ---

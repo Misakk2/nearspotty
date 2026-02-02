@@ -12,9 +12,12 @@ export interface Place {
         };
     };
     photos?: {
-        photo_reference: string;
+        name?: string; // V1 API resource name
+        photo_reference?: string; // Legacy API reference
         height: number;
         width: number;
+        url?: string; // Pre-generated URL from server
+        author_attributions?: any[];
     }[];
     imageSrc: string; // Mandatory (fallback if needed)
     photoUrl?: string; // New V1 API Valid URL
