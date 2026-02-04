@@ -15,13 +15,28 @@ import { MatchScoreBadge } from "@/components/search/MatchScoreBadge";
 import { CommunicativeLoader } from "@/components/ui/CommunicativeLoader";
 import toast from "react-hot-toast";
 import PlaceLightbox from "@/components/search/PlaceLightbox";
+import { usePlaceStore } from "@/store/place-store";
 
 // Helper to safely get photo URL
-const getPhotoUrl = (photo: any) => {
+const getPhotoUrl = (photo: any, placeId: string) => {
+    // 1. Direct Proxy URL from Backend (Ideal)
+    if (photo?.proxy_url) return photo.proxy_url;
+
+    // 2. Already Cached URL
     if (photo?.url) return photo.url;
-    if (photo?.photo_reference) {
-        return `https://maps.googleapis.com/maps/api/place/photo?maxwidth=800&photoreference=${photo.photo_reference}&key=${process.env.NEXT_PUBLIC_GOOGLE_PLACES_KEY}`;
+
+    const width = 800;
+
+    // 3. V1 Reference -> Proxy
+    if (photo?.name) {
+        return `/api/images/proxy?id=${placeId}&ref=${encodeURIComponent(photo.name)}&width=${width}`;
     }
+
+    // 4. Legacy Reference -> Proxy
+    if (photo?.photo_reference) {
+        return `/api/images/proxy?id=${placeId}&ref=${photo.photo_reference}&width=${width}`;
+    }
+
     return null;
 };
 
@@ -31,8 +46,18 @@ export default function PlaceDetailPage() {
     const { user } = useAuth();
     const placeId = params.id as string;
 
-    const [place, setPlace] = useState<Place | null>(null);
-    const [loading, setLoading] = useState(true);
+    // Zustand Store
+    const { selectedPlace, setPlace: setStorePlace } = usePlaceStore();
+
+    // Initialize state from store if ID matches, otherwise null
+    const [place, setPlace] = useState<Place | null>(() => {
+        if (selectedPlace && selectedPlace.place_id === placeId) {
+            return selectedPlace;
+        }
+        return null;
+    });
+
+    const [loading, setLoading] = useState(!place);
     const [preferences, setPreferences] = useState<UserPreferences | null>(null);
     const [aiScore, setAiScore] = useState<GeminiScore | null>(null);
     const [analyzing, setAnalyzing] = useState(false);
@@ -83,10 +108,10 @@ export default function PlaceDetailPage() {
             }
         };
 
-        if (placeId) {
+        if (placeId && !place) {
             fetchPlaceDetails();
         }
-    }, [placeId]);
+    }, [placeId, place]);
 
     // Perform AI Analysis automatically if preferences exist
     useEffect(() => {
@@ -94,9 +119,13 @@ export default function PlaceDetailPage() {
             const analyze = async () => {
                 setAnalyzing(true);
                 try {
+                    const token = await user?.getIdToken();
                     const res = await fetch("/api/gemini/score", {
                         method: "POST",
-                        headers: { "Content-Type": "application/json" },
+                        headers: {
+                            "Content-Type": "application/json",
+                            "Authorization": `Bearer ${token}`
+                        },
                         body: JSON.stringify({
                             placeId: place.place_id,
                             name: place.name,
@@ -129,7 +158,7 @@ export default function PlaceDetailPage() {
 
     if (!place) return <div className="p-8 text-center text-muted-foreground">Place not found</div>;
 
-    const mainPhoto = place.photos?.[0] ? getPhotoUrl(place.photos[0]) : null;
+    const mainPhoto = place.photos?.[0] ? getPhotoUrl(place.photos[0], place.place_id) : null;
     const additionalPhotos = place.photos?.slice(1) || [];
 
     return (
@@ -373,7 +402,7 @@ export default function PlaceDetailPage() {
                                 >
                                     {/* eslint-disable-next-line @next/next/no-img-element */}
                                     <img
-                                        src={getPhotoUrl(photo) || ""}
+                                        src={getPhotoUrl(photo, place.place_id) || ""}
                                         alt={`Photo ${i}`}
                                         className="w-full h-full object-cover transition-transform group-hover:scale-105"
                                     />
@@ -385,7 +414,7 @@ export default function PlaceDetailPage() {
                         <PlaceLightbox
                             isOpen={lightboxController}
                             initialIndex={lightboxSlide - 1} // 0-based index for logic, component handles slide mapping
-                            images={additionalPhotos.map(p => getPhotoUrl(p) || "")}
+                            images={additionalPhotos.map(p => getPhotoUrl(p, place.place_id) || "")}
                         />
 
                         {/* TAB CONTENT: REVIEWS */}

@@ -9,9 +9,24 @@ interface CacheEntry<T = unknown> {
 /**
  * Gets a cached value from Firestore if it exists and is not expired.
  */
-export async function getCache<T = unknown>(collection: string, key: string): Promise<T | null> {
+// Fallback App ID if not in env
+const APP_ID = process.env.NEXT_PUBLIC_FIREBASE_APP_ID || process.env.NEXT_PUBLIC_APP_ID || "nearspotty_default";
+
+function getCacheCollectionRef(collectionName: string) {
+    // Enforce the mandatory path: /artifacts/${appId}/public/data/${collectionName}
+    // Structure: artifacts(col) -> appId(doc) -> public(col) -> data(doc) -> collectionName(col)
+    return adminDb.collection('artifacts').doc(APP_ID)
+        .collection('public').doc('data')
+        .collection(collectionName);
+}
+
+/**
+ * Gets a cached value from Firestore if it exists and is not expired.
+ */
+export async function getCache<T = unknown>(collectionName: string, key: string): Promise<T | null> {
     try {
-        const doc = await adminDb.collection(collection).doc(key).get();
+        const ref = getCacheCollectionRef(collectionName).doc(key);
+        const doc = await ref.get();
         if (!doc.exists) return null;
 
         const entry = doc.data() as CacheEntry<T>;
@@ -19,14 +34,14 @@ export async function getCache<T = unknown>(collection: string, key: string): Pr
 
         if (now - entry.timestamp > entry.ttl) {
             // Expired, delete it (fire and forget)
-            adminDb.collection(collection).doc(key).delete().catch(console.error);
+            ref.delete().catch(e => console.error("Cache purge failed:", e));
             return null;
         }
 
         return entry.data;
     } catch (error) {
-        console.error("Cache get error:", error);
-        return null;
+        console.error("Cache get error (ignoring):", error);
+        return null; // Fail safe
     }
 }
 
@@ -34,15 +49,29 @@ export async function getCache<T = unknown>(collection: string, key: string): Pr
  * Sets a value in Firestore cache with a TTL.
  * @param ttl Time to live in milliseconds. Default 24h.
  */
-export async function setCache<T = unknown>(collection: string, key: string, data: T, ttl: number = 24 * 60 * 60 * 1000) {
+export async function setCache<T = unknown>(collectionName: string, key: string, data: T, ttl: number = 24 * 60 * 60 * 1000, userId?: string) {
+    // Auth Check: User must be authenticated to write to cache (PREVENTS PERMISSION DENIED crashes)
+    if (!userId) {
+        console.warn("[Cache] Skipping write: No authenticated user.");
+        return;
+    }
+
     try {
-        await adminDb.collection(collection).doc(key).set({
-            data,
+        // Sanitize data -> Remove undefined
+        const cleanData = JSON.parse(JSON.stringify(data));
+
+        const ref = getCacheCollectionRef(collectionName).doc(key);
+
+        await ref.set({
+            data: cleanData,
             timestamp: Date.now(),
-            ttl
+            ttl,
+            updatedBy: userId
         });
+
     } catch (error) {
-        console.error("Cache set error:", error);
+        // Graceful Failure: Do NOT throw 500. Just log and continue.
+        console.error(`[Cache] Write failed for ${key} (non-fatal):`, error);
     }
 }
 

@@ -1,6 +1,7 @@
 export interface Place {
     place_id: string;
     name: string;
+    description?: string; // fallback if needed
     vicinity?: string;
     formatted_address?: string;
     rating?: number;
@@ -19,9 +20,12 @@ export interface Place {
         url?: string; // Pre-generated URL from server
         author_attributions?: any[];
     }[];
-    imageSrc: string; // Mandatory (fallback if needed)
-    photoUrl?: string; // New V1 API Valid URL
-    fallbackImageCategory?: string; // e.g., "restaurant", "cafe" for determining icon/color if image keeps failing
+    imageSrc: string; // Legacy field, now populated with proxyPhotoUrl
+
+    // NEW STRICT FIELD
+    proxyPhotoUrl?: string;
+
+    fallbackImageCategory?: string;
     opening_hours?: {
         open_now: boolean;
         weekday_text?: string[];
@@ -38,4 +42,6 @@ export interface Place {
         profile_photo_url: string;
     }[];
     price_level?: number;
+    isExactMatch?: boolean;
+    isGeneric?: boolean;
 }

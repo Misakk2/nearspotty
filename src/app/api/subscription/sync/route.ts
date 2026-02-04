@@ -11,8 +11,10 @@ export async function POST(req: NextRequest) {
         }
 
         const token = authHeader.split("Bearer ")[1];
+        console.log("[Subscription Sync] Verifying token...");
         const decodedToken = await adminAuth.verifyIdToken(token);
         const userId = decodedToken.uid;
+        console.log(`[Subscription Sync] Verified user: ${userId}`);
 
         const userRef = adminDb.collection("users").doc(userId);
         const userDoc = await userRef.get();
@@ -59,6 +61,7 @@ export async function POST(req: NextRequest) {
             status: "all",
             limit: 1,
         });
+        console.log(`[Subscription Sync] Found ${subscriptions.data.length} subscriptions for customer ${stripeCustomerId}`);
 
         if (subscriptions.data.length === 0) {
             // No active subscription found -> Free
@@ -94,8 +97,9 @@ export async function POST(req: NextRequest) {
 
         return NextResponse.json({ status: "synced", tier, subscription: sub.status });
 
-    } catch (error) {
+    } catch (error: any) {
         console.error("Subscription Sync Error:", error);
-        return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+        console.error("Stack:", error?.stack);
+        return NextResponse.json({ error: "Internal Server Error", details: error?.message }, { status: 500 });
     }
 }

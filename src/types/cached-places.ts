@@ -88,7 +88,11 @@ export function placeToCache(place: Place, gridKey: string, ttlMs: number = 24 *
             price_level: place.price_level,
             vicinity: place.vicinity || '',
             formatted_address: place.formatted_address,
-            photos: place.photos,
+            photos: place.photos?.filter(p => p.photo_reference).map(p => ({
+                photo_reference: p.photo_reference as string,
+                height: p.height,
+                width: p.width
+            })),
             opening_hours: place.opening_hours,
             imageSrc: place.imageSrc, // Save imageSrc
         },
@@ -118,6 +122,6 @@ export function cacheToPlace(cached: CachedPlace): Place {
         reviews: cached.reviews,
         geometry: cached.geometry,
         imageSrc: cached.basic_info.imageSrc || "/placeholder-restaurant.jpg", // Restore or fallback
-        photoUrl: cached.basic_info.imageSrc // Backward compat
+        proxyPhotoUrl: cached.basic_info.imageSrc // Use proxy field
     };
 }

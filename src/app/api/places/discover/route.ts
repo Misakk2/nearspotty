@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: "Location (lat, lng) required" }, { status: 400 });
     }
 
-    if (!process.env.NEXT_PUBLIC_GOOGLE_PLACES_KEY) {
+    if (!process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY) {
         return NextResponse.json({ error: "Missing API Key" }, { status: 500 });
     }
 
@@ -75,35 +75,95 @@ export async function GET(request: NextRequest) {
         }
 
         // Cache miss or expired - fetch from Google Places API
+        // MIGRATION: Switched to Places API v1 to support Field Masking (Cost Saving)
         const baseUrl = keyword
-            ? "https://maps.googleapis.com/maps/api/place/textsearch/json"
-            : "https://maps.googleapis.com/maps/api/place/nearbysearch/json";
+            ? "https://places.googleapis.com/v1/places:searchText"
+            : "https://places.googleapis.com/v1/places:searchNearby";
 
-        const url = new URL(baseUrl);
-        url.searchParams.append("key", process.env.NEXT_PUBLIC_GOOGLE_PLACES_KEY);
+        const googleRes = await fetch(baseUrl, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "X-Goog-Api-Key": process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY as string,
+                // COST SAVING: Only fetch what we display on the card
+                // Basic: name, id, photos, types
+                // Contact: opening hours (User Requested)
+                // Atmosphere: rating, userRatingCount, priceLevel, reviews (User Requested)
+                "X-Goog-FieldMask": "places.name,places.id,places.displayName,places.formattedAddress,places.types,places.rating,places.userRatingCount,places.priceLevel,places.photos,places.location,places.regularOpeningHours,places.reviews"
+            },
+            body: JSON.stringify({
+                ...(keyword ? { textQuery: `${keyword} ${type}` } : {}),
+                locationRestriction: {
+                    circle: {
+                        center: { latitude: lat, longitude: lng },
+                        radius: radius
+                    }
+                },
+                maxResultCount: 20
+            })
+        });
 
-        if (keyword) {
-            url.searchParams.append("query", `${keyword} ${type}`);
-            url.searchParams.append("location", `${lat},${lng}`);
-            url.searchParams.append("radius", radius.toString());
-        } else {
-            url.searchParams.append("location", `${lat},${lng}`);
-            url.searchParams.append("radius", radius.toString());
-            url.searchParams.append("type", type);
-        }
+        const data = await googleRes.json();
 
-        const res = await fetch(url.toString());
-        const data = await res.json();
-
-        if (data.status !== "OK" && data.status !== "ZERO_RESULTS") {
-            console.error(`[Discover] Google Places API Error: ${data.status}`, data.error_message);
+        if (!googleRes.ok) {
+            console.error(`[Discover] Google Places API Error: ${googleRes.status}`, data);
             return NextResponse.json({
                 error: "Failed to fetch places",
-                details: data.error_message
+                details: data.error?.message || "Unknown error"
             }, { status: 500 });
         }
 
-        const places: Place[] = data.results || [];
+        // Helper to convert V1 Price Level to Legacy Number
+        const mapPriceLevel = (level: string): number | undefined => {
+            switch (level) {
+                case "PRICE_LEVEL_FREE": return 0;
+                case "PRICE_LEVEL_INEXPENSIVE": return 1;
+                case "PRICE_LEVEL_MODERATE": return 2;
+                case "PRICE_LEVEL_EXPENSIVE": return 3;
+                case "PRICE_LEVEL_VERY_EXPENSIVE": return 4;
+                default: return undefined;
+            }
+        };
+
+        // Map v1 response structure to our Place interface
+        const places: Place[] = (data.places || []).map((p: any) => ({
+            place_id: p.id,
+            name: p.displayName?.text || p.id,
+            formatted_address: p.formattedAddress,
+            rating: p.rating,
+            user_ratings_total: p.userRatingCount,
+            price_level: p.priceLevel ? mapPriceLevel(p.priceLevel) : undefined,
+            geometry: {
+                location: {
+                    lat: p.location?.latitude || 0,
+                    lng: p.location?.longitude || 0
+                }
+            },
+            photos: p.photos?.map((photo: any) => ({
+                name: photo.name, // Resource Name for V1
+                width: photo.widthPx,
+                height: photo.heightPx,
+                author_attributions: photo.authorAttributions
+            })),
+            types: p.types || [],
+            imageSrc: "",
+
+            // Map V1 Opening Hours to Legacy Format
+            opening_hours: p.regularOpeningHours ? {
+                open_now: p.regularOpeningHours.openNow,
+                weekday_text: p.regularOpeningHours.weekdayDescriptions
+            } : undefined,
+
+            // Map V1 Reviews to Legacy Format
+            reviews: p.reviews?.map((r: any) => ({
+                author_name: r.authorAttribution?.displayName || "Anonymous",
+                rating: r.rating,
+                text: r.text?.text || "",
+                time: r.publishTime ? new Date(r.publishTime).getTime() / 1000 : 0,
+                relative_time_description: r.relativePublishTimeDescription,
+                profile_photo_url: r.authorAttribution?.photoUri || ""
+            }))
+        }));
 
         // Cache the results in Firestore (only if we have results)
         if (places.length > 0) {

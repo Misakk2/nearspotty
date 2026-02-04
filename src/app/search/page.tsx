@@ -9,7 +9,7 @@ import LocationModal from "@/components/search/LocationModal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Place } from "@/types/place";
-import { Search, MapPin, Loader2, Sparkles, UtensilsCrossed, Wine, Coffee } from "lucide-react";
+import { Search, MapPin, Loader2, Sparkles, UtensilsCrossed, Wine, Coffee, Lock } from "lucide-react";
 import { useState, useEffect, useCallback, useRef } from "react";
 import toast from "react-hot-toast";
 import { useAuth } from "@/components/auth-provider";
@@ -24,6 +24,7 @@ import MobileSearch from "@/components/search/MobileSearch";
 import { useSearchState } from "@/hooks/useSearchState";
 import { PremiumBadge } from "@/components/ui/PremiumBadge";
 import { CommunicativeLoader } from "@/components/ui/CommunicativeLoader";
+import { SmartDiscoveryAlert } from "@/components/search/SmartDiscoveryAlert";
 
 // Score map type for storing scores by place_id
 type ScoreMap = Record<string, GeminiScore>;
@@ -69,6 +70,11 @@ export default function SearchPage() {
     const [limitReached, setLimitReached] = useState(false);
     const [subscriptionTier, setSubscriptionTier] = useState<'free' | 'premium'>('free');
     const [remainingScans, setRemainingScans] = useState(5);
+
+    // Smart Discovery State
+    const [discoveryMessage, setDiscoveryMessage] = useState<string | null>(null);
+    const [relevanceStatus, setRelevanceStatus] = useState<string>("match");
+    const [currentRadius, setCurrentRadius] = useState(5000);
 
     // Location local UI state
     const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
@@ -126,18 +132,26 @@ export default function SearchPage() {
     }, [searchParams, mapInstance]);
 
     // 2. Fetch Places logic
+    // 2. Fetch Places logic (Reacting to URL changes)
+    // 2. Fetch Places logic (Reacting to URL changes)
+    // MODIFIED: Only fetch if there is an explicit query or category. 
+    // Do NOT fetch solely on location change (manual trigger preferred).
     useEffect(() => {
         const q = searchParams.get("q") || searchParams.get("keyword");
         const category = searchParams.get("category");
-        const lat = searchParams.get("lat");
-        const lng = searchParams.get("lng");
+        // const lat = searchParams.get("lat"); // Ignored for auto-fetch
+        // const lng = searchParams.get("lng"); // Ignored for auto-fetch
 
-        // Only fetch if params exist AND we don't have results? 
-        // Or blindly fetch to ensure freshness? Use places.length check to avoid refetch on hydration?
-        // Let's allow refetch if URL params change. 
-        if ((q || category) && lat && lng) {
+        // Only auto-trigger if we have an intent (query/category)
+        if (q || category) {
+            const lat = searchParams.get("lat");
+            const lng = searchParams.get("lng");
+            const location = (lat && lng)
+                ? { lat: parseFloat(lat), lng: parseFloat(lng) }
+                : undefined;
+
             fetchPlaces(
-                { lat: parseFloat(lat), lng: parseFloat(lng) },
+                location,
                 q || category || undefined
             );
         }
@@ -183,7 +197,7 @@ export default function SearchPage() {
         fetchUserData();
     }, [user]);
 
-    const fetchPlaces = useCallback(async (location?: { lat: number; lng: number }, query?: string, cityIdOverride?: string) => {
+    const fetchPlaces = useCallback(async (location?: { lat: number; lng: number }, query?: string, cityIdOverride?: string, radius: number = 5000) => {
         if (!user) {
             toast.error("Please log in to search");
             return;
@@ -191,9 +205,9 @@ export default function SearchPage() {
 
         storeStartSearch(); // Clear old results and set loading=true atomically
         setSelectedPlaceId(null);
-        // CRITICAL FIX: Clear old data immediately to prevent "zombie" mock data from showing
-        // We only clear if we are actually fetching diverse new results, not just paginating (pagination not impl yet)
-        // We might want to keep map center, but definitely clear list results
+        setDiscoveryMessage(null); // Reset discovery
+        setRelevanceStatus("match");
+        setCurrentRadius(radius); // Sync local state
 
         try {
             const token = await user.getIdToken();
@@ -203,14 +217,16 @@ export default function SearchPage() {
             const activeCityId = cityIdOverride || cityId;
             if (activeCityId) params.append("cityId", activeCityId);
 
+            params.append("radius", radius.toString());
+
             if (location) {
                 params.append("lat", location.lat.toString());
                 params.append("lng", location.lng.toString());
-                params.append("radius", "5000");
             } else {
-                params.append("lat", center.lat.toString());
-                params.append("lng", center.lng.toString());
-                params.append("radius", "5000");
+                if (center.lat !== 0 || center.lng !== 0) {
+                    params.append("lat", center.lat.toString());
+                    params.append("lng", center.lng.toString());
+                }
             }
 
             const res = await fetch(`/api/search?${params.toString()}`, {
@@ -221,7 +237,9 @@ export default function SearchPage() {
             if (res.status === 402 || data.code === 'LIMIT_REACHED' || (data.usage && data.usage.limitReached)) {
                 setLimitReached(true);
                 setRemainingScans(0);
-                if (!limitReached) toast("AI limits reached. Showing standard results.", { icon: "ℹ️" });
+                setPlaces([]); // Clear results to force focus on upgrade
+                // toast.error("Daily limit reached"); 
+                // Don't toast, the UI banner is better
             } else {
                 setLimitReached(false);
             }
@@ -253,6 +271,14 @@ export default function SearchPage() {
                 if (Object.keys(newScores).length > 0) {
                     setScores(newScores);
                 }
+
+                if (Object.keys(newScores).length > 0) {
+                    setScores(newScores);
+                }
+
+                // Set Smart Discovery State
+                setRelevanceStatus(data.relevanceStatus || "match");
+                setDiscoveryMessage(data.discoveryMessage || null);
 
                 setPlaces(data.results);
                 if (mapInstance && data.results.length > 0) {
@@ -414,7 +440,7 @@ export default function SearchPage() {
             mapInstance?.setCenter(location);
             mapInstance?.setZoom(14);
         } catch (error) {
-            toast.error("Geolocation failed. Please enter location manually.");
+            toast.error("Could not detect location. Please type a city name.");
             setGpsAttempted(true);
             setLocationModalOpen(true);
         }
@@ -486,6 +512,13 @@ export default function SearchPage() {
         toast.success("Search cleared");
     };
 
+    const handleIncreaseRadius = () => {
+        // Expand to 10km (or add 5km to current)
+        const newRadius = currentRadius + 5000;
+        toast.loading(`Expanding search to ${newRadius / 1000}km...`);
+        fetchPlaces(undefined, searchQuery || undefined, undefined, newRadius);
+    };
+
 
     return (
         <ProtectedRoute>
@@ -522,16 +555,19 @@ export default function SearchPage() {
 
                             {/* Upgrade CTA */}
                             {limitReached && subscriptionTier === 'free' && (
-                                <div className="bg-gradient-to-r from-purple-500 to-indigo-600 rounded-xl p-4 text-white">
+                                <div className="bg-gradient-to-r from-gray-800 to-gray-900 rounded-xl p-4 text-white shadow-md mx-1">
                                     <div className="flex items-center gap-2 mb-2">
-                                        <Sparkles className="h-5 w-5" />
-                                        <h3 className="font-semibold">Unlock Unlimited Searches</h3>
+                                        <Lock className="h-4 w-4 text-amber-400" />
+                                        <h3 className="font-semibold text-sm text-amber-50">Basic Search Mode</h3>
                                     </div>
-                                    <p className="text-sm text-white/90 mb-3">
-                                        You&apos;ve used all your free searches. Upgrade to Premium!
+                                    <p className="text-xs text-gray-300 mb-3 leading-relaxed">
+                                        You have used your monthly AI credits. Showing standard results without AI scoring or deep insights.
                                     </p>
                                     <Link href="/pricing">
-                                        <Button className="w-full bg-white text-purple-600 hover:bg-white/90">Upgrade</Button>
+                                        <Button size="sm" className="w-full bg-amber-500 hover:bg-amber-600 text-white border-none font-semibold">
+                                            <Sparkles className="h-3 w-3 mr-1.5" />
+                                            Unlock Premium
+                                        </Button>
                                     </Link>
                                 </div>
                             )}
@@ -570,6 +606,14 @@ export default function SearchPage() {
                             )}
 
                             {loading && <CommunicativeLoader />}
+
+                            {!loading && relevanceStatus === "no_exact_match" && (
+                                <SmartDiscoveryAlert
+                                    keyword={searchQuery}
+                                    message={discoveryMessage}
+                                    onIncreaseRadius={handleIncreaseRadius}
+                                />
+                            )}
 
                             <div className="space-y-4 md:pb-0">
                                 {places.map((place) => (

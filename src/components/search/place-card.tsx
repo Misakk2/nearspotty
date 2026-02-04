@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { UserPreferences, GeminiScore } from "@/types";
 import { MatchScoreBadge } from "./MatchScoreBadge";
+import { usePlaceStore } from "@/store/place-store";
 
 export interface PlaceCardProps {
     place: Place;
@@ -29,7 +30,8 @@ export default function PlaceCard({
     userLocation
 }: PlaceCardProps) {
 
-    const photoUrl = place.imageSrc || place.photoUrl || "/placeholder-restaurant.jpg";
+    // STICT COMPLIANCE: Prioritize proxyPhotoUrl to avoid Google billing leaks
+    const photoUrl = place.proxyPhotoUrl || place.imageSrc || "/placeholder-restaurant.jpg";
 
     const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
         const R = 6371; // Radius of the earth in km
@@ -52,7 +54,12 @@ export default function PlaceCard({
         ? calculateDistance(userLocation.lat, userLocation.lng, place.geometry.location.lat, place.geometry.location.lng)
         : null;
 
+    const setPlace = usePlaceStore((state) => state.setPlace);
+
     const handleClick = (e: React.MouseEvent) => {
+        // Cache the place data instantly for 0ms navigation
+        setPlace(place);
+
         // Save scroll position before navigation
         if (onBeforeNavigate) {
             onBeforeNavigate();
@@ -71,7 +78,7 @@ export default function PlaceCard({
                     {/* Image */}
                     <div className={`w-32 md:w-full h-full md:h-40 shrink-0 bg-gray-200 relative ${isMobile ? 'w-32 h-32' : ''}`}>
                         {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={photoUrl} alt={place.name} className="w-full h-full object-cover" />
+                        <img src={photoUrl} alt={place.name} className="w-full h-full object-cover" loading="lazy" />
 
                         {/* Opening Hours Badge with Popover */}
                         {place.opening_hours?.open_now !== undefined && (
@@ -124,11 +131,10 @@ export default function PlaceCard({
                                 <div className="w-10 h-10 rounded-full bg-gray-300/80 animate-pulse" />
                             ) : score && typeof score.matchScore === 'number' ? (
                                 <MatchScoreBadge score={score.matchScore} size="sm" />
-                            ) : limitReached ? (
-                                /* Limit reached - show upgrade badge */
+                            ) : (limitReached || place.isGeneric) ? (
+                                /* Limit reached or Generic Mode - show upgrade badge */
                                 <div className="bg-amber-500 text-white text-[10px] font-bold px-2 py-1 rounded-full flex items-center gap-1 shadow-md">
                                     <Lock className="h-3 w-3" />
-                                    <Crown className="h-3 w-3" />
                                 </div>
                             ) : null}
                         </div>
@@ -138,7 +144,18 @@ export default function PlaceCard({
                     <CardContent className="flex-1 p-3 flex flex-col justify-between relative">
                         <div>
                             <div className="flex justify-between items-start">
-                                <h3 className="font-semibold text-sm line-clamp-1">{place.name || "Unknown Place"}</h3>
+                                <div className="flex flex-col items-start gap-1 w-full">
+                                    {place.isExactMatch === false ? (
+                                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 uppercase tracking-wide">
+                                            Alternative Suggestion
+                                        </span>
+                                    ) : place.isExactMatch === true ? (
+                                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-green-100 text-green-700 uppercase tracking-wide">
+                                            Exact Match
+                                        </span>
+                                    ) : null}
+                                    <h3 className="font-semibold text-sm line-clamp-1">{place.name || "Unknown Place"}</h3>
+                                </div>
                             </div>
 
                             <div className="flex items-center text-xs text-muted-foreground mt-1">
@@ -207,10 +224,14 @@ export default function PlaceCard({
                                         </div>
                                     )}
                                 </div>
-                            ) : limitReached ? (
-                                <div className="bg-amber-50 p-2 rounded-md border border-amber-200 text-center">
-                                    <p className="text-[10px] text-amber-700 font-medium">
-                                        🔒 Upgrade to Premium for AI match scores
+                            ) : (limitReached || place.isGeneric) ? (
+                                <div className="bg-gray-50 p-2 rounded-md border border-gray-200 flex flex-col items-start gap-1">
+                                    <div className="flex items-center gap-1 text-[10px] font-medium text-gray-500">
+                                        <Lock className="h-3 w-3" />
+                                        <span>Basic Result</span>
+                                    </div>
+                                    <p className="text-[10px] text-primary font-semibold">
+                                        ✨ Upgrade to see AI match score
                                     </p>
                                 </div>
                             ) : scoringLoading ? (

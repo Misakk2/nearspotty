@@ -21,8 +21,8 @@ service cloud.firestore {
 
     // Cities Cache - Read-only for clients (Admin SDK handles writes)
     match /cities/{cityId} {
-      allow read: if isAuthenticated();
-      allow write: if false; 
+      allow read: if true; // Public: Reference data
+      allow write: if false; // 🔒 Protected: Use /api/cities/add
     }
 
     // Restaurants/Websites

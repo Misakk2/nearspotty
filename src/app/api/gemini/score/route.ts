@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { adminDb } from "@/lib/firebase-admin";
-import { checkRateLimit } from "@/lib/rate-limit";
+import { adminDb, adminAuth } from "@/lib/firebase-admin";
+import { checkUserLimit, incrementUserUsage } from "@/lib/user-limits";
 import crypto from "crypto";
 
-const genAI = new GoogleGenerativeAI(process.env.NEXT_PUBLIC_GEMINI_API_KEY || "");
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" });
 
 // Cache validity duration: 30 days
@@ -12,25 +12,41 @@ const CACHE_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
 
 export async function POST(request: NextRequest) {
     try {
-        // Simple rate limiting based on IP - use x-forwarded-for since request.ip is not available in Next.js 16+
-        const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || request.headers.get("x-real-ip") || "unknown";
-        const rateLimit = await checkRateLimit(`gemini_score_${ip}`, { limit: 10, windowMs: 60 * 1000 }); // 10 per minute
-
-        if (rateLimit.limitReached) {
-            return NextResponse.json({ error: "Too many requests. Please try again in a minute." }, { status: 429 });
-        }
-
         const { placeId, name, dietary, reviews } = await request.json();
 
         if (!placeId || !name || !dietary) {
             return NextResponse.json({ error: "Missing required fields (placeId, name, dietary)" }, { status: 400 });
         }
 
+        // 1. AUTHENTICATION (Bearer Token)
+        let userId: string | null = null;
+        const authHeader = request.headers.get("Authorization");
+        if (authHeader?.startsWith("Bearer ")) {
+            try {
+                const token = await adminAuth.verifyIdToken(authHeader.split("Bearer ")[1]);
+                userId = token.uid;
+            } catch (e) {
+                console.error("Token invalid:", e);
+                // We might allow anonymous if we have a strict IP limit, but for now let's be strict or fallback?
+                // Request says: "User searches for a place". Place Detail usually requires auth?
+                // Let's enforce auth for billing.
+            }
+        }
+
+        // 2. BILLING CHECK
+        if (userId) {
+            const status = await checkUserLimit(userId);
+            if (status.limitReached) {
+                return NextResponse.json({ error: "Limit reached", code: "LIMIT_REACHED" }, { status: 402 });
+            }
+        } else {
+            // Require Auth for AI features to prevent abuse
+            return NextResponse.json({ error: "Authentication required for AI analysis" }, { status: 401 });
+        }
+
         // Create deterministic hash for dietary preferences to use as part of cache key
-        // Sort keys to ensure consistent hash regardless of object property order
         const dietaryString = JSON.stringify(dietary, Object.keys(dietary).sort());
         const dietaryHash = crypto.createHash('md5').update(dietaryString).digest('hex');
-
         const cacheKey = `${placeId}_${dietaryHash}`;
 
         // Check Firestore Cache
@@ -40,41 +56,54 @@ export async function POST(request: NextRequest) {
         if (cacheDoc.exists) {
             const data = cacheDoc.data();
             const now = Date.now();
-            // Check if cache is still valid
             if (data && data.timestamp && (now - data.timestamp < CACHE_DURATION_MS)) {
                 console.log(`Cache HIT for ${name}`);
+                // Cache hit = FREE? Or do we count it? 
+                // Usually cache hits are free. Only charge for GENERATION.
                 return NextResponse.json(data.score);
             }
         }
 
         console.log(`Cache MISS for ${name}, calling Gemini...`);
 
+        // 3. FETCH REVIEWS (V1 MIGRATION)
         let reviewText = "";
 
-        // If we don't have reviews in the request (typical case for list view items), fetch them.
         if (!reviews || reviews.length === 0) {
             console.log(`Fetching details for ${placeId}...`);
-            const detailsUrl = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${placeId}&fields=name,reviews&key=${process.env.NEXT_PUBLIC_GOOGLE_PLACES_KEY}`;
-            const detailsRes = await fetch(detailsUrl);
-            const detailsData = await detailsRes.json();
+            // V1 API
+            const url = `https://places.googleapis.com/v1/places/${placeId}`;
+            const res = await fetch(url, {
+                headers: {
+                    "X-Goog-Api-Key": process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY!,
+                    "X-Goog-FieldMask": "places.reviews,places.name"
+                }
+            });
 
-            if (detailsData.result && detailsData.result.reviews) {
-                reviewText = detailsData.result.reviews.map((r: { text: string }) => r.text).join("\n");
+            if (res.ok) {
+                const data = await res.json();
+                if (data.reviews) {
+                    reviewText = data.reviews.map((r: any) => r.text?.text || "").join("\n");
+                }
             } else {
-                console.log("No reviews found for", placeId);
-                // We can still try to score based on name/type if we had it, but for now fallback
-                return NextResponse.json({ error: "No reviews available for analysis" }, { status: 404 });
+                console.error("Failed to fetch reviews (V1)", res.status);
             }
         } else {
-            reviewText = reviews.map((r: { text: string }) => r.text).join("\n");
+            reviewText = reviews.map((r: any) => r.text).join("\n");
         }
 
+        if (!reviewText) {
+            // Fallback or error?
+            // Proceed with just name/type?
+        }
+
+        // 4. GENERATE CONTENT
         const prompt = `
       Analyze this restaurant for a user and determine how well it matches their preferences.
       
       Restaurant: ${name}
       User Profile: ${JSON.stringify(dietary)}
-      Reviews: ${reviewText}
+      Reviews: ${reviewText || "No reviews available."}
       
       Consider:
       - Dietary restrictions and allergies
@@ -113,6 +142,11 @@ export async function POST(request: NextRequest) {
             score: json,
             timestamp: Date.now()
         });
+
+        // 5. BILLING (Increment)
+        if (userId) {
+            await incrementUserUsage(userId);
+        }
 
         return NextResponse.json(json);
     } catch (error) {

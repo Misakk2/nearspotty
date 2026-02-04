@@ -23,6 +23,7 @@ functions/lib
 .env.local
 .env.*.local
 .env.production.local
+.env.production
 
 # IDE
 .vscode/

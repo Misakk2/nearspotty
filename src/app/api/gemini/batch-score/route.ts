@@ -10,11 +10,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { adminDb } from "@/lib/firebase-admin";
 import { checkRateLimit } from "@/lib/rate-limit";
-import { checkAIUsage, incrementAIUsage } from "@/lib/ai-usage";
+import { checkUserLimit, incrementUserUsage } from "@/lib/user-limits";
 import crypto from "crypto";
 import { GeminiScore } from "@/types";
 
-const genAI = new GoogleGenerativeAI(process.env.NEXT_PUBLIC_GEMINI_API_KEY || "");
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" });
 
 // Cache duration: 7 days
@@ -58,7 +58,7 @@ export async function POST(request: NextRequest) {
         // Check subscription limits
         let usageStatus = null;
         if (userId) {
-            usageStatus = await checkAIUsage(userId);
+            usageStatus = await checkUserLimit(userId);
             if (usageStatus.limitReached) {
                 return NextResponse.json({
                     error: "AI check limit reached",
@@ -202,7 +202,7 @@ Output Schema:
 
             // Increment usage
             if (userId && uncachedPlaces.length > 0) {
-                await incrementAIUsage(userId);
+                await incrementUserUsage(userId);
             }
 
             return NextResponse.json({

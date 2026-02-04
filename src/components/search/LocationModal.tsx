@@ -53,6 +53,7 @@ export default function LocationModal({
     const [unifiedSuggestions, setUnifiedSuggestions] = useState<(PlaceSuggestion & { source: 'cache' | 'api', cachedData?: CachedCity })[]>([]);
     const [loading, setLoading] = useState(false);
     const [placesReady, setPlacesReady] = useState(false);
+    const [gpsError, setGpsError] = useState<string | null>(null); // New state for specific GPS errors
     const debounceRef = useRef<NodeJS.Timeout | null>(null);
     const sessionTokenRef = useRef<google.maps.places.AutocompleteSessionToken | null>(null);
 
@@ -247,6 +248,7 @@ export default function LocationModal({
     }, [onSelectLocation, onClose]);
 
     const handleRetryGPS = () => {
+        setGpsError(null); // Clear previous errors
         onRetryGPS();
         onClose();
     };
@@ -276,6 +278,10 @@ export default function LocationModal({
                         Where are you?
                     </DialogTitle>
                     <DialogDescription>
+                        {gpsError
+                            ? <span className="text-amber-600 block mb-1">⚠️ {gpsError}</span>
+                            : null
+                        }
                         {hideGPSRetry
                             ? "Location services unavailable. Please search for your city below."
                             : "We couldn't detect your location automatically. Search for your city or enable location services."

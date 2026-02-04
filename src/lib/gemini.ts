@@ -1,7 +1,7 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { GeminiScore } from "@/types";
 
-const genAI = new GoogleGenerativeAI(process.env.NEXT_PUBLIC_GEMINI_API_KEY || "");
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" }); // Using Flash for speed
 
 /**
@@ -104,11 +104,44 @@ Output Schema:
 }
 
 /**
+ * Generates a friendly "No Exact Match" discovery message in Slovak.
+ */
+export async function generateDiscoveryMessage(
+    keyword: string,
+    availableCategories: string[],
+    userProfile: any
+): Promise<string> {
+    const prompt = `
+    Role: Friendly local guide "Nearspotty".
+    Language: Strictly English.
+    Situation: User searched for "${keyword}" but we found NO exact matches nearby.
+    Available places have these categories: ${availableCategories.join(', ')}.
+    User Profile: ${JSON.stringify(userProfile)}
+
+    Task: Write a short, helpful message (max 2 sentences).
+    1. Acknowledge we couldn't find specific "${keyword}".
+    2. Suggest an alternative from available categories based on user profile OR suggest increasing radius.
+    3. Be distinct but polite.
+
+    Example output: "We couldn't find any ${keyword} nearby, but based on your love for Asian cuisine, you might enjoy these Thai alternatives."
+    `;
+
+    try {
+        const result = await retryOperation(() => model.generateContent(prompt));
+        return result.response.text();
+    } catch (e) {
+        console.error("Discovery Message Error:", e);
+        return `We couldn't find any "${keyword}" in this area. Try increasing the search radius or look for other businesses nearby.`;
+    }
+}
+
+/**
  * Advanced Scoring with Deep Context (Reviews, Summary).
  */
 export async function scorePlacesWithDeepContext(
     places: PlaceWithContext[],
-    userProfile: any
+    userProfile: any,
+    currentQuery: string | null = null
 ): Promise<Map<string, GeminiScore>> {
     if (!places.length) return new Map();
 
@@ -127,21 +160,32 @@ export async function scorePlacesWithDeepContext(
     }));
 
     const prompt = `
-Task: Analyze these restaurants against the specific User Profile.
+Task: Analyze these restaurants against the User Profile AND Current Search Query.
 User Profile: ${JSON.stringify(userProfile)}
+Current Search Query (HIGHEST PRIORITY): "${currentQuery || "General Recommendation"}"
 
 Restaurants Data (JSON):
 ${JSON.stringify(placesPayload, null, 2)}
 
-Strict Scoring Rules:
-1. SAFETY FIRST: If a review mentions "cross-contamination", "got sick", "reaction", or explicit diet violation (e.g. "found meat" for vegan) -> Score MUST be < 50. Set "warning_flag": true.
-2. RELEVANCE: If the place perfectly matches the query AND diet (e.g. "Dedicated GF" for Celiac) -> Score MUST be > 90.
-3. If no relevant info found -> Score ~70-75 (Neutral).
+Strict Scoring Rules (Total 100):
+1. INTENT FIRST (Keyword Match - 70% Weight): 
+   - You are analyzing results for the query "${currentQuery}". 
+   - If a place name DIRECTLY contains this keyword (e.g. "Sushi"), it is a 100% MATCH -> Score 90-100.
+   - If it is a relevant venue (e.g. "Vietnamese" offering "Sushi" in reviews/types), it is a HIGH MATCH -> Score 80-90.
+   - FATAL PENALTY: If it does NOT match the intent (e.g. User wants "Sushi" but place is "Mexican" with no mention of sushi), it is a MISMATCH -> Score MAX 40.
+   - Do NOT suggest unrelated cuisines unless explicitly requested.
+2. PREFERENCES (+30 Bonus): 
+   - Add up to 30 points for matching User Profile (Diet, Vibe, Cuisine, etc.) IF it passes strict intent.
+3. SAFETY: If review has "cross-contamination" or "reaction" -> Score < 50 always. Set warning_flag: true.
 
 Output Requirements:
-- Return a JSON Array exactly matching the input list size and order.
+- Return a JSON Array exactly matching the input list.
 - Each item: { "id": number, "matchScore": number (0-100), "shortReason": "string (max 15 words)", "warning_flag": boolean, "pros": ["string"], "cons": ["string"] }
 - NO Markdown formatting. Just the raw JSON array.
+- LANGUAGE: English Only.
+- REASONING:
+  - If PRECISE MATCH: "Found because you searched for ${currentQuery}."
+  - If ALTERNATIVE: "No ${currentQuery} nearby, but this fits your profile."
 `;
 
     try {
