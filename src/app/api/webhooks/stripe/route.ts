@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
-import { adminDb } from "@/lib/firebase-admin";
+import { getAdminDb } from "@/lib/firebase-admin";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
     apiVersion: "2026-01-28.clover",
 });
 
-const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
 
 export async function POST(request: Request) {
     // 1. Validate Secret & Signature
@@ -24,6 +24,7 @@ export async function POST(request: Request) {
         const body = await request.text();
         event = stripe.webhooks.constructEvent(body, signature, webhookSecret);
         console.log(`[Stripe Webhook] 🔔 Webhook Verified. Event: ${event.type}`);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (err: any) {
         console.error(`❌ [Stripe Webhook] Signature Verification Failed: ${err.message}`);
         return NextResponse.json({ error: `Webhook Error: ${err.message}` }, { status: 400 });
@@ -32,7 +33,7 @@ export async function POST(request: Request) {
     console.log(`[Stripe Webhook] ➡️  Event Type: ${event.type}`);
 
     // --- IDEMPOTENCY CHECK ---
-    const eventRef = adminDb.collection('webhook_events').doc(event.id);
+    const eventRef = getAdminDb().collection('webhook_events').doc(event.id);
     const eventDoc = await eventRef.get();
     if (eventDoc.exists) {
         console.log(`[Stripe Webhook] ⚠️ Event ${event.id} already processed. Skipping.`);
@@ -104,7 +105,7 @@ export async function POST(request: Request) {
 
                 // Standardized User Object Update
                 // Update user with subscription details AND explicit tier upgrade
-                await adminDb.collection("users").doc(userId).set({
+                await getAdminDb().collection("users").doc(userId).set({
                     subscription: {
                         status: status,
                         tier: 'premium',
@@ -126,6 +127,7 @@ export async function POST(request: Request) {
             } else {
                 console.error("❌ [Stripe Webhook] ERROR: checkout.session.completed missing client_reference_id. Cannot link to user.");
             }
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (err: any) {
             console.error("❌ [Stripe Webhook] CRITICAL ERROR in checkout.session.completed handler:");
             console.error(err);
@@ -140,7 +142,7 @@ export async function POST(request: Request) {
 
         try {
             // Find user by stripeCustomerId
-            const usersSnapshot = await adminDb.collection("users")
+            const usersSnapshot = await getAdminDb().collection("users")
                 .where("stripeCustomerId", "==", customerId)
                 .limit(1)
                 .get();
@@ -155,6 +157,7 @@ export async function POST(request: Request) {
                 const cancelAt = subscription.cancel_at
                     ? new Date(subscription.cancel_at * 1000).toISOString()
                     : null;
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 const currentPeriodEnd = new Date((subscription as unknown as { current_period_end: number }).current_period_end * 1000).toISOString();
 
                 // User keeps premium access until period end even if they've canceled, unless status is not active/trialing (e.g. unpaid)
@@ -193,7 +196,7 @@ export async function POST(request: Request) {
         const customerId = subscription.customer as string;
 
         try {
-            const usersSnapshot = await adminDb.collection("users")
+            const usersSnapshot = await getAdminDb().collection("users")
                 .where("stripeCustomerId", "==", customerId)
                 .limit(1)
                 .get();

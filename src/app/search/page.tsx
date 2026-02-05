@@ -4,12 +4,10 @@ import Map from "@/components/search/map";
 import ProtectedRoute from "@/components/protected-route";
 import RoleGuard from "@/components/RoleGuard";
 import PlaceCard from "@/components/search/place-card";
-import { PlaceCardSkeleton } from "@/components/search/PlaceCardSkeleton";
 import LocationModal from "@/components/search/LocationModal";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Place } from "@/types/place";
-import { Search, MapPin, Loader2, Sparkles, UtensilsCrossed, Wine, Coffee, Lock } from "lucide-react";
+import { MapPin, Sparkles, Lock } from "lucide-react";
 import { useState, useEffect, useCallback, useRef } from "react";
 import toast from "react-hot-toast";
 import { useAuth } from "@/components/auth-provider";
@@ -42,7 +40,7 @@ export default function SearchPage() {
             center,
             cityId,
             selectedCategory,
-            scrollPosition,
+            // scrollPosition,
             searchQuery,
             isLoading: loading
         },
@@ -81,6 +79,8 @@ export default function SearchPage() {
     const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | undefined>(undefined);
     const [locationModalOpen, setLocationModalOpen] = useState(false);
     const [gpsAttempted, setGpsAttempted] = useState(false);
+    // const [locationMode, setLocationMode] = useState<'near_me' | 'custom'>('near_me');
+    // const [selectedCityName, setSelectedCityName] = useState<string | null>(null);
 
     // Track if auto-initialization has run
     const hasAutoInitialized = useRef(false);
@@ -89,15 +89,15 @@ export default function SearchPage() {
     useSubscriptionSync();
 
     // Helper wrappers to match previous API where possible
-    const setPlaces = (newPlaces: Place[]) => setStorePlaces(newPlaces);
-    const setScores = (newScores: ScoreMap) => updateStoreScores(newScores);
-    const setCenter = (loc: { lat: number; lng: number }) => setStoreLocation({ ...loc, cityId: cityId || undefined });
-    const setCityId = (id: string | null) => {
-        if (id) setStoreLocation({ lat: center.lat, lng: center.lng, cityId: id });
-    };
-    const setSelectedCategory = (cat: string | null) => setStoreCategory(cat);
-    const setSearchQuery = (q: string) => setStoreSearchQuery(q);
-    const setLoading = (l: boolean) => setStoreLoading(l);
+    const setPlaces = useCallback((newPlaces: Place[]) => setStorePlaces(newPlaces), [setStorePlaces]);
+    const setScores = useCallback((newScores: ScoreMap) => updateStoreScores(newScores), [updateStoreScores]);
+    const setCenter = useCallback((loc: { lat: number; lng: number }) => setStoreLocation({ ...loc, cityId: cityId || undefined }), [setStoreLocation, cityId]);
+    // const setCityId = (id: string | null) => {
+    //     if (id) setStoreLocation({ lat: center.lat, lng: center.lng, cityId: id });
+    // };
+    const setSelectedCategory = useCallback((cat: string | null) => setStoreCategory(cat), [setStoreCategory]);
+    const setSearchQuery = useCallback((q: string) => setStoreSearchQuery(q), [setStoreSearchQuery]);
+    const setLoading = useCallback((l: boolean) => setStoreLoading(l), [setStoreLoading]);
 
 
     // 1. URL State Management (Source of Truth)
@@ -304,7 +304,7 @@ export default function SearchPage() {
         } finally {
             setLoading(false);
         }
-    }, [center, cityId, mapInstance, user, limitReached, setPlaces, setStoreLocation]);
+    }, [center, cityId, mapInstance, user, setPlaces, setLoading, setScores, storeStartSearch]);
 
     // Auto-score logic
     const autoScorePlaces = useCallback(async (placesToScore: Place[]) => {
@@ -439,12 +439,12 @@ export default function SearchPage() {
             setCenter(location); // This updates store via wrapper
             mapInstance?.setCenter(location);
             mapInstance?.setZoom(14);
-        } catch (error) {
+        } catch {
             toast.error("Could not detect location. Please type a city name.");
             setGpsAttempted(true);
             setLocationModalOpen(true);
         }
-    }, [mapInstance, searchParams, router, setCenter, cityId]);
+    }, [mapInstance, searchParams, router, setCenter]);
 
     const handleLocationSelect = useCallback((location: { lat: number; lng: number; name: string; placeId?: string }) => {
         const params = new URLSearchParams(searchParams.toString());
@@ -458,6 +458,10 @@ export default function SearchPage() {
         } else {
             setCenter(location);
         }
+
+        // Update location mode for UI
+        // setLocationMode('custom');
+        // setSelectedCityName(location.name);
 
         mapInstance?.setCenter(location);
         mapInstance?.setZoom(13);
@@ -504,7 +508,7 @@ export default function SearchPage() {
         setStoreCategory(category); // Use store setter
         setSearchQuery(category);
         fetchPlaces(undefined, category);
-    }, [fetchPlaces, setStoreCategory]);
+    }, [fetchPlaces, setStoreCategory, setSearchQuery]);
 
     const handleClearSearch = () => {
         resetStoreSearch();
@@ -518,6 +522,12 @@ export default function SearchPage() {
         toast.loading(`Expanding search to ${newRadius / 1000}km...`);
         fetchPlaces(undefined, searchQuery || undefined, undefined, newRadius);
     };
+
+    // const handleRadiusChange = (newRadius: number) => {
+    //     setCurrentRadius(newRadius);
+    //     // Debounced search will be triggered when user stops sliding
+    //     // For now, just update state - user can trigger search via category/query
+    // };
 
 
     return (
@@ -553,6 +563,8 @@ export default function SearchPage() {
                                 </div>
                             </div>
 
+
+
                             {/* Upgrade CTA */}
                             {limitReached && subscriptionTier === 'free' && (
                                 <div className="bg-gradient-to-r from-gray-800 to-gray-900 rounded-xl p-4 text-white shadow-md mx-1">
@@ -563,7 +575,7 @@ export default function SearchPage() {
                                     <p className="text-xs text-gray-300 mb-3 leading-relaxed">
                                         You have used your monthly AI credits. Showing standard results without AI scoring or deep insights.
                                     </p>
-                                    <Link href="/pricing">
+                                    <Link href="/subscription">
                                         <Button size="sm" className="w-full bg-amber-500 hover:bg-amber-600 text-white border-none font-semibold">
                                             <Sparkles className="h-3 w-3 mr-1.5" />
                                             Unlock Premium
@@ -674,6 +686,7 @@ export default function SearchPage() {
                                     mapInstance.setZoom(16);
                                 }
                             }}
+
                         />
                     </div>
                     <LocationModal

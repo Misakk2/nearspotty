@@ -8,7 +8,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { adminDb } from "@/lib/firebase-admin";
+import { getAdminDb } from "@/lib/firebase-admin";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { checkUserLimit, incrementUserUsage } from "@/lib/user-limits";
 import crypto from "crypto";
@@ -85,7 +85,7 @@ export async function POST(request: NextRequest) {
         // Check cache for each place
         for (const place of placesToScore) {
             const cacheKey = `batch_${place.place_id}_${profileHash}`;
-            const cacheRef = adminDb.collection('restaurant_scores').doc(cacheKey);
+            const cacheRef = getAdminDb().collection('restaurant_scores').doc(cacheKey);
             const cacheDoc = await cacheRef.get();
 
             if (cacheDoc.exists) {
@@ -186,7 +186,7 @@ Output Schema:
 
                 const cacheKey = `batch_${place.place_id}_${profileHash}`;
                 // Async cache set (fire & forget-ish)
-                await adminDb.collection('restaurant_scores').doc(cacheKey).set({
+                await getAdminDb().collection('restaurant_scores').doc(cacheKey).set({
                     placeId: place.place_id,
                     profileHash,
                     score,

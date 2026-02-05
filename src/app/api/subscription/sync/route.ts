@@ -1,6 +1,6 @@
 
 import { NextRequest, NextResponse } from "next/server";
-import { adminAuth, adminDb } from "@/lib/firebase-admin";
+import { getAdminAuth, getAdminDb } from "@/lib/firebase-admin";
 import { stripe } from "@/lib/stripe";
 
 export async function POST(req: NextRequest) {
@@ -12,11 +12,11 @@ export async function POST(req: NextRequest) {
 
         const token = authHeader.split("Bearer ")[1];
         console.log("[Subscription Sync] Verifying token...");
-        const decodedToken = await adminAuth.verifyIdToken(token);
+        const decodedToken = await getAdminAuth().verifyIdToken(token);
         const userId = decodedToken.uid;
         console.log(`[Subscription Sync] Verified user: ${userId}`);
 
-        const userRef = adminDb.collection("users").doc(userId);
+        const userRef = getAdminDb().collection("users").doc(userId);
         const userDoc = await userRef.get();
 
         if (!userDoc.exists) {
@@ -88,7 +88,9 @@ export async function POST(req: NextRequest) {
                 status: sub.status,
                 tier: tier,
                 cancel_at_period_end: sub.cancel_at_period_end,
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 current_period_end: (sub as any).current_period_end
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     ? new Date((sub as any).current_period_end * 1000).toISOString()
                     : null,
             },
@@ -97,8 +99,17 @@ export async function POST(req: NextRequest) {
 
         return NextResponse.json({ status: "synced", tier, subscription: sub.status });
 
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
         console.error("Subscription Sync Error:", error);
+
+        // Handle Invalid Token Errors specifically
+        if (error?.codePrefix === 'auth' ||
+            error?.message?.includes('no "kid" claim') ||
+            error?.message?.includes('Decoding Firebase ID token failed')) {
+            return NextResponse.json({ error: "Unauthorized", details: "Invalid Token" }, { status: 401 });
+        }
+
         console.error("Stack:", error?.stack);
         return NextResponse.json({ error: "Internal Server Error", details: error?.message }, { status: 500 });
     }

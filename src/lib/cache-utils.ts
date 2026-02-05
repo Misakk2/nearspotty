@@ -1,4 +1,4 @@
-import { adminDb } from "./firebase-admin";
+import { getAdminDb } from "./firebase-admin";
 
 interface CacheEntry<T = unknown> {
     data: T;
@@ -15,7 +15,7 @@ const APP_ID = process.env.NEXT_PUBLIC_FIREBASE_APP_ID || process.env.NEXT_PUBLI
 function getCacheCollectionRef(collectionName: string) {
     // Enforce the mandatory path: /artifacts/${appId}/public/data/${collectionName}
     // Structure: artifacts(col) -> appId(doc) -> public(col) -> data(doc) -> collectionName(col)
-    return adminDb.collection('artifacts').doc(APP_ID)
+    return getAdminDb().collection('artifacts').doc(APP_ID)
         .collection('public').doc('data')
         .collection(collectionName);
 }

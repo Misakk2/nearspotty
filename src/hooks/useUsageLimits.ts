@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { doc, getDoc, updateDoc, increment, setDoc } from "firebase/firestore";
+import { doc, getDoc, updateDoc, increment } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/components/auth-provider";
 import {
@@ -100,6 +100,7 @@ export function useUsageLimits(): UsageLimitsResult {
                     reservations: data.reservations || 0,
                     // aiChecks: overwritten by API above
                     monthKey: currentMonthKey
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 } as any));
             }
 

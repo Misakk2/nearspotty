@@ -38,7 +38,7 @@ const BUSINESS_CUISINE_OPTIONS = [
 ];
 
 function OnboardingForm() {
-    const { user } = useAuth();
+    const { user, userRole } = useAuth();
     const router = useRouter();
     const searchParams = useSearchParams();
 
@@ -79,14 +79,23 @@ function OnboardingForm() {
             if (userDoc.exists()) {
                 const data = userDoc.data();
                 setUserPlan(data.plan || "free");
-                if (data.preferences?.completedOnboarding) {
+
+                // CRITICAL LOOP FIX:
+                // Only redirect if AuthProvider ALSO sees the role.
+                // If AuthProvider thinks "no_role", stayed here to let it sync or let user re-save.
+                if (data.preferences?.completedOnboarding && userRole && userRole !== "no_role" && userRole !== "error") {
                     const role = data.role;
+                    console.log(`[Onboarding] Redirecting to ${role} dashboard`);
                     router.push(role === "owner" ? "/dashboard" : "/search");
+                } else if (data.preferences?.completedOnboarding && userRole === "no_role") {
+                    console.warn("[Onboarding] Firestore has profile but AuthProvider sees no_role. Waiting for sync...");
+                    // Do NOT redirect yet. The AuthProvider snapshot listener should eventually fire.
+                    // If it never fires, the user stays on Onboarding and can click "Complete Setup" again to force a write/sync.
                 }
             }
         };
         checkOnboarding();
-    }, [user, router]);
+    }, [user, router, userRole]);
 
     const handleSubmit = async () => {
         if (!user) return;

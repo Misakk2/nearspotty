@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
-import { adminAuth, adminDb } from "@/lib/firebase-admin";
+import { getAdminAuth, getAdminDb } from "@/lib/firebase-admin";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
     apiVersion: "2026-01-28.clover",
@@ -32,7 +32,7 @@ export async function POST(request: NextRequest) {
     let userId: string;
 
     try {
-        const decodedToken = await adminAuth.verifyIdToken(token);
+        const decodedToken = await getAdminAuth().verifyIdToken(token);
         userId = decodedToken.uid;
     } catch (error) {
         console.error("[subscription/cancel] Token verification failed:", error);
@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
 
     // --- 2. Get User's Stripe Customer ID ---
     try {
-        const userDoc = await adminDb.collection("users").doc(userId).get();
+        const userDoc = await getAdminDb().collection("users").doc(userId).get();
 
         if (!userDoc.exists) {
             return NextResponse.json(
@@ -95,7 +95,7 @@ export async function POST(request: NextRequest) {
         const currentPeriodEnd = toSafeISOString(subData.current_period_end);
 
         // --- 5. Update Firestore ---
-        await adminDb.collection("users").doc(userId).update({
+        await getAdminDb().collection("users").doc(userId).update({
             subscriptionStatus: "active_until_period_end",
             cancelAtPeriodEnd: true,
             cancelAt,

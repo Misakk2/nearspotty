@@ -17,7 +17,7 @@ interface PlaceLightboxProps {
  */
 export const PlaceLightbox = ({ isOpen, images, initialIndex }: PlaceLightboxProps) => {
     return (
-        // @ts-ignore - FsLightbox types might be incomplete
+
         <FsLightbox
             toggler={isOpen}
             slide={initialIndex + 1}

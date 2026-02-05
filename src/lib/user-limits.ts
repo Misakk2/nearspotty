@@ -1,4 +1,4 @@
-import { adminDb } from "@/lib/firebase-admin";
+import { getAdminDb } from "@/lib/firebase-admin";
 import { FieldValue } from "firebase-admin/firestore";
 import { DINER_LIMITS } from "@/lib/plan-limits";
 
@@ -7,7 +7,7 @@ const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
 function getUsageRef(userId: string) {
     // /artifacts/${appId}/users/${userId}/usage/stats
-    return adminDb.collection('artifacts').doc(APP_ID)
+    return getAdminDb().collection('artifacts').doc(APP_ID)
         .collection('users').doc(userId)
         .collection('usage').doc('stats');
 }
@@ -27,7 +27,7 @@ export interface UserLimitStatus {
  * Automatically resets count if >30 days from last reset.
  */
 export async function checkUserLimit(userId: string): Promise<UserLimitStatus> {
-    const userRef = adminDb.collection('users').doc(userId);
+    const userRef = getAdminDb().collection('users').doc(userId);
     const usageRef = getUsageRef(userId);
 
     const [userDoc, usageDoc] = await Promise.all([
@@ -118,10 +118,10 @@ export async function incrementUserUsage(userId: string): Promise<void> {
  */
 export async function reserveUserCredit(userId: string): Promise<{ authorized: boolean; tier: 'free' | 'premium'; remaining: number }> {
     const usageRef = getUsageRef(userId);
-    const userRef = adminDb.collection('users').doc(userId);
+    const userRef = getAdminDb().collection('users').doc(userId);
 
     try {
-        return await adminDb.runTransaction(async (t) => {
+        return await getAdminDb().runTransaction(async (t) => {
             const userDoc = await t.get(userRef);
             const usageDoc = await t.get(usageRef);
 

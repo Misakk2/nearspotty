@@ -14,13 +14,18 @@ export interface Place {
     };
     photos?: {
         name?: string; // V1 API resource name
-        photo_reference?: string; // Legacy API reference
+        /** @deprecated Use proxyPhotoUrl instead */
+        photo_reference?: string;
         height: number;
         width: number;
-        url?: string; // Pre-generated URL from server
+        /** @deprecated Use proxyPhotoUrl instead */
+        url?: string;
+        proxyPhotoUrl?: string; // New Standard
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         author_attributions?: any[];
     }[];
-    imageSrc: string; // Legacy field, now populated with proxyPhotoUrl
+    /** @deprecated Use proxyPhotoUrl instead */
+    imageSrc: string;
 
     // NEW STRICT FIELD
     proxyPhotoUrl?: string;

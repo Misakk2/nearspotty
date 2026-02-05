@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { adminAuth, adminDb } from "@/lib/firebase-admin";
+import { getAdminAuth, getAdminDb } from "@/lib/firebase-admin";
 
 /**
  * Secure City Addition API
@@ -19,8 +19,8 @@ export async function POST(request: NextRequest) {
 
     try {
         const token = authHeader.split("Bearer ")[1];
-        await adminAuth.verifyIdToken(token);
-    } catch (e) {
+        await getAdminAuth().verifyIdToken(token);
+    } catch {
         return NextResponse.json({ error: "Invalid Token" }, { status: 401 });
     }
 
@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
 
     // 3. Idempotency Check (Don't double-charge/double-write)
     // We use the Place ID as the document ID for 'cities'
-    const cityRef = adminDb.collection("cities").doc(placeId);
+    const cityRef = getAdminDb().collection("cities").doc(placeId);
     const doc = await cityRef.get();
 
     if (doc.exists) {
@@ -69,6 +69,7 @@ export async function POST(request: NextRequest) {
 
         // 5. Construct City Object
         // Extract Country/Short Name
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const countryComponent = data.addressComponents?.find((c: any) =>
             c.types.includes("country")
         );
@@ -96,6 +97,7 @@ export async function POST(request: NextRequest) {
             city: newCity
         });
 
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
         console.error("Add City Error:", error);
         return NextResponse.json({ error: error.message || "Failed to add city" }, { status: 500 });

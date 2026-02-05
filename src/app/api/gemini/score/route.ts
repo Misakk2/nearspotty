@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { adminDb, adminAuth } from "@/lib/firebase-admin";
+import { getAdminDb, getAdminAuth } from "@/lib/firebase-admin";
 import { checkUserLimit, incrementUserUsage } from "@/lib/user-limits";
 import crypto from "crypto";
 
@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
         const authHeader = request.headers.get("Authorization");
         if (authHeader?.startsWith("Bearer ")) {
             try {
-                const token = await adminAuth.verifyIdToken(authHeader.split("Bearer ")[1]);
+                const token = await getAdminAuth().verifyIdToken(authHeader.split("Bearer ")[1]);
                 userId = token.uid;
             } catch (e) {
                 console.error("Token invalid:", e);
@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
         const cacheKey = `${placeId}_${dietaryHash}`;
 
         // Check Firestore Cache
-        const cacheRef = adminDb.collection('restaurant_scores').doc(cacheKey);
+        const cacheRef = getAdminDb().collection('restaurant_scores').doc(cacheKey);
         const cacheDoc = await cacheRef.get();
 
         if (cacheDoc.exists) {
@@ -83,12 +83,14 @@ export async function POST(request: NextRequest) {
             if (res.ok) {
                 const data = await res.json();
                 if (data.reviews) {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     reviewText = data.reviews.map((r: any) => r.text?.text || "").join("\n");
                 }
             } else {
                 console.error("Failed to fetch reviews (V1)", res.status);
             }
         } else {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             reviewText = reviews.map((r: any) => r.text).join("\n");
         }
 

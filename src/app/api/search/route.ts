@@ -1,12 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { adminAuth } from "@/lib/firebase-admin";
+import { getAdminAuth } from "@/lib/firebase-admin";
 import { getCache, setCache, createCacheKey } from "@/lib/cache-utils";
-import { checkUserLimit, incrementUserUsage } from "@/lib/user-limits";
+import { checkUserLimit, reserveUserCredit } from "@/lib/user-limits";
 import { scorePlacesWithDeepContext } from "@/lib/gemini"; // Preserving AI Logic
 
-const GOOGLE_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY;
-
-// Strict Field Mask (No reviews/opening hours for list view)
 const LIST_FIELD_MASK = [
     "places.id",
     "places.displayName",
@@ -21,11 +18,15 @@ const LIST_FIELD_MASK = [
 
 export async function GET(request: NextRequest) {
     try {
-        // --- 1. Validation & Config ---
-        if (!GOOGLE_API_KEY) {
-            return NextResponse.json({ error: "Server Configuration Error" }, { status: 500 });
-        }
+        // --- 0. Panic Room: Global Crash Prevention ---
+        // Ensure we NEVER crash with HTML.
+        const GOOGLE_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY;
+        const FIREBASE_PROJECT_ID = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
 
+        if (!GOOGLE_API_KEY) throw new Error("MISSING ENV VAR: NEXT_PUBLIC_GOOGLE_MAPS_KEY");
+        if (!FIREBASE_PROJECT_ID) throw new Error("MISSING ENV VAR: NEXT_PUBLIC_FIREBASE_PROJECT_ID");
+
+        // --- 1. Validation & Config ---
         const { searchParams } = new URL(request.url);
         const lat = parseFloat(searchParams.get("lat") || "0");
         const lng = parseFloat(searchParams.get("lng") || "0");
@@ -40,24 +41,10 @@ export async function GET(request: NextRequest) {
         if (authHeader?.startsWith("Bearer ")) {
             try {
                 const token = authHeader.split("Bearer ")[1];
-                const decodedToken = await adminAuth.verifyIdToken(token);
+                const decodedToken = await getAdminAuth().verifyIdToken(token);
                 userId = decodedToken.uid;
-            } catch (e) {
+            } catch {
                 console.warn("[Search API] Invalid Token");
-            }
-        }
-
-        // Check Limits BEFORE fetching anything
-        let usageStatus = null;
-        if (userId) {
-            usageStatus = await checkUserLimit(userId);
-            if (usageStatus.limitReached) {
-                return NextResponse.json({
-                    error: "Monthly limit reached",
-                    code: "LIMIT_REACHED",
-                    mode: 'free',
-                    tier: 'free'
-                }, { status: 402 });
             }
         }
 
@@ -73,22 +60,46 @@ export async function GET(request: NextRequest) {
             cacheKey = `v2:${createCacheKey({ lat, lng, radius, keyword })}`;
         }
 
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const cachedData = await getCache<any>(cacheCollection, cacheKey);
 
         if (cachedData) {
+            // Cache hit! Return data with CURRENT user credits (no deduction).
+            let currentStatus = null;
+            if (userId) {
+                currentStatus = await checkUserLimit(userId);
+            }
             return NextResponse.json({
                 ...cachedData,
-                creditsRemaining: usageStatus?.remaining ?? 5,
-                mode: usageStatus?.tier ?? 'free',
+                creditsRemaining: currentStatus?.remaining ?? 5,
+                mode: currentStatus?.tier ?? 'free',
                 source: "cache"
             });
+        }
+
+        // --- 4. Reserve Credit (Transaction) ---
+        // On Cache MISS, we strictly reserve credit via transaction BEFORE fetching.
+        let reservedStatus: { authorized: boolean; tier: 'free' | 'premium'; remaining: number } | null = null;
+
+        if (userId) {
+            reservedStatus = await reserveUserCredit(userId);
+
+            if (!reservedStatus.authorized) {
+                return NextResponse.json({
+                    error: "Monthly limit reached",
+                    code: "LIMIT_REACHED",
+                    mode: 'free',
+                    tier: 'free'
+                }, { status: 402 });
+            }
         }
 
         // --- 4. Fetch (Costly Operation) ---
         console.log(`[Search API] MISS ${cacheKey}. Fetching Google V1.`);
 
         let endpoint = "https://places.googleapis.com/v1/places:searchNearby";
-        let requestBody: any = {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const requestBody: any = {
             maxResultCount: 20
         };
 
@@ -124,6 +135,7 @@ export async function GET(request: NextRequest) {
         const googleData = await googleRes.json();
 
         // --- 5. Transform (Proxy URLs Only) ---
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const rawPlaces = (googleData.places || []).map((p: any) => {
             const photoRef = p.photos?.[0]?.name;
             const placeId = p.id;
@@ -154,51 +166,46 @@ export async function GET(request: NextRequest) {
 
         // --- 6. AI Scoring (Optional Enhancement) ---
         let finalResults = rawPlaces;
-        // Only run AI if user is authenticated and we just spent a credit? 
-        // Or if they are valid.
-        // Let's run it if we have results.
         if (userId && rawPlaces.length > 0) {
             try {
-                // We don't need a separate credit for AI if the Search itself is the credit.
-                // But we can pass context.
-                // NOTE: We do NOT increment usages *again* here if we are bundling it.
-                // The original code passed 'rawPlaces' to Gemini.
                 const scoresMap = await scorePlacesWithDeepContext(rawPlaces, {}, keyword);
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 finalResults = rawPlaces.map((p: any) => ({
                     ...p,
                     ai_score: scoresMap.get(p.place_id),
                     isGeneric: !scoresMap.get(p.place_id)
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 })).sort((a: any, b: any) => (b.ai_score?.matchScore || 0) - (a.ai_score?.matchScore || 0));
             } catch (e) {
                 console.warn("AI Scoring failed, returning raw results", e);
             }
         }
 
+        // --- 7. Respond with Reserved Status ---
+        const finalCredits = reservedStatus?.remaining ?? 0;
+        const finalMode = reservedStatus?.tier ?? 'free';
+        // Note: Credits were already decremented in step 4 via reserveUserCredit transaction.
+
         const responseData = {
             results: finalResults,
-            mode: usageStatus?.tier ?? 'free',
-            creditsRemaining: usageStatus ? (usageStatus.remaining - 1) : 0, // Predicted logic
+            mode: finalMode,
+            creditsRemaining: finalCredits,
+            refreshNeeded: true // Signal UI to update
         };
 
-        // --- 7. Save Cache & CHARGE USER ---
+        // --- 8. Save Cache (Async) ---
         if (userId) {
-            await Promise.all([
-                setCache(cacheCollection, cacheKey, responseData, 24 * 60 * 60 * 1000, userId),
-                incrementUserUsage(userId) // The Bill
-            ]);
-            // Adjust local variable for accurate response
-            if (responseData.creditsRemaining !== Infinity) {
-                // It's already calculated as remaining - 1 above.
-            }
+            await setCache(cacheCollection, cacheKey, responseData, 24 * 60 * 60 * 1000, userId);
         }
 
         return NextResponse.json(responseData);
 
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
-        console.error("[Search API] Critical Error:", error);
+        console.error("🔥 CRITICAL SEARCH ERROR:", error);
         return NextResponse.json({
-            error: "Internal Server Error",
-            details: error.message,
+            error: error.message || "Internal Server Error",
+            code: "CRITICAL_FAILURE",
             stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
         }, { status: 500 });
     }

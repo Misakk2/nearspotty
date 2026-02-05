@@ -29,15 +29,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             try {
                 setUser(firebaseUser);
                 if (firebaseUser) {
+                    console.log(`[AuthProvider] User detected: ${firebaseUser.uid}`);
                     // Subscribe to real-time updates for the user document
                     const unsubscribeFirestore = onSnapshot(doc(db, "users", firebaseUser.uid), (docSnapshot) => {
+                        console.log(`[AuthProvider] Snapshot update. Exists: ${docSnapshot.exists()}`);
                         if (docSnapshot.exists()) {
                             const data = docSnapshot.data();
-                            setUserRole(data.role || "diner");
+                            console.log(`[AuthProvider] Role: ${data.role}`);
+                            // Normalize "user" -> "diner" (legacy fix)
+                            const role = (data.role === "user" || !data.role) ? "diner" : data.role;
+                            setUserRole(role);
                             // Set subscription tier from Firestore
                             const tier = data.tier || data.subscriptionTier || (data.plan === 'premium' ? 'premium' : 'free');
                             setSubscriptionTier(tier);
                         } else {
+                            console.log(`[AuthProvider] Document does not exist. Setting no_role.`);
                             setUserRole("no_role");
                             setSubscriptionTier('free');
                         }
@@ -52,6 +58,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     // Cleanup Firestore listener when auth state changes or component unmounts
                     return () => unsubscribeFirestore();
                 } else {
+                    console.log(`[AuthProvider] No user.`);
                     setUserRole(null);
                     setSubscriptionTier('free');
                     setLoading(false);

@@ -4,6 +4,7 @@ import { UtensilsCrossed, Coffee, Beer } from "lucide-react";
 export interface Category {
     id: string;
     label: string;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     icon: any; // Lucide icon component
     description?: string;
     keywords?: string;

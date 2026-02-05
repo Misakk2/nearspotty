@@ -1,7 +1,7 @@
 import { Storage } from "@google-cloud/storage";
 
 // Configuration
-const BUCKET_NAME = "place-photos-cache";
+const BUCKET_NAME = process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET;
 const PROJECT_ID = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "nearspotty-13f22";
 // Note: This script runs in Node, so we grab emulators from env or default
 const EMULATOR_HOST = process.env.FIREBASE_STORAGE_EMULATOR_HOST || "127.0.0.1:9199";

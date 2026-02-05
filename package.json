@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:all": "concurrently \"npm run emulators\" \"NEXT_PUBLIC_USE_EMULATORS=true npm run dev\"",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
@@ -29,7 +30,7 @@
     "framer-motion": "^12.26.2",
     "fslightbox-react": "^2.0.2",
     "lucide-react": "^0.562.0",
-    "next": "^16.1.6",
+    "next": "^15.1.7",
     "react": "^18",
     "react-day-picker": "^9.13.0",
     "react-dom": "^18",
@@ -43,8 +44,9 @@
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
+    "concurrently": "^9.2.1",
     "eslint": "^9",
-    "eslint-config-next": "^16.1.6",
+    "eslint-config-next": "^15.1.7",
     "postcss": "^8",
     "tailwindcss": "^3.4.1",
     "typescript": "^5"

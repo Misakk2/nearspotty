@@ -22,9 +22,9 @@ export default async function Home() {
   ];
 
   const features = [
-    { icon: "scoring", title: "Smart Dietary Scoring", description: "AI reads reviews like a friend. 'They modified my pasta for allergies' = 4.8/5 safety score." },
+    { icon: "scoring", title: "Smart Dietary Scoring", description: "AI reads reviews like a friend. \"They modified my pasta for allergies\" = 4.8/5 safety score." },
     { icon: "availability", title: "Real-Time Availability", description: "Only see restaurants open NOW. No more closed kitchen surprises." },
-    { icon: "recommendation", title: "Personalized Dish Recommendations", description: "Gemini 3 suggests: 'Try the quinoa burger – reviewers with your diet loved it.'" },
+    { icon: "recommendation", title: "Personalized Dish Recommendations", description: "Gemini 3 suggests: \"Try the quinoa burger – reviewers with your diet loved it.\"" },
     { icon: "reservation", title: "One-Tap Reservations", description: "Book your table in 10 seconds. Confirmation email instant." },
   ];
 

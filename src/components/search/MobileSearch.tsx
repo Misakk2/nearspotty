@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
-import { Search, Loader2, MapPin, ChevronUp, User, LogOut, CreditCard, Settings, X } from "lucide-react";
+import { Search, Loader2, ChevronUp, User, LogOut, CreditCard, Settings, X } from "lucide-react";
 import { useAuth } from "@/components/auth-provider";
 import { auth } from "@/lib/firebase";
 import { signOut } from "firebase/auth";
@@ -13,6 +13,9 @@ import PlaceCard from "@/components/search/place-card";
 import { APP_CATEGORIES } from "@/config/categories";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
+import { LocationPopover } from "@/components/navigation/LocationPopover";
+import { useSearchStore } from "@/hooks/useSearchState";
+import { useRouter } from "next/navigation";
 
 interface MobileSearchProps {
     places: Place[];
@@ -58,23 +61,63 @@ export default function MobileSearch({
     limitReached,
     remainingScans,
     subscriptionTier,
-    onUseLocation,
+    // onUseLocation, // Unused
     onPlaceSelect,
     userLocation,
     onClear
 }: MobileSearchProps) {
+    const router = useRouter();
     const [isExpanded, setIsExpanded] = useState(false);
     const [isProfileOpen, setIsProfileOpen] = useState(false);
     const [loadingMessage, setLoadingMessage] = useState(LOADING_MESSAGES[0]);
+    const [isLoadingGPS, setIsLoadingGPS] = useState(false);
     const scrollRef = useRef<HTMLDivElement>(null);
-    const { user, subscriptionTier: userTier } = useAuth();
+    const { user } = useAuth();
+
+    // Shared state
+    const { cityName, setCity, setLocation } = useSearchStore();
+
+    const handleUseGPS = async () => {
+        setIsLoadingGPS(true);
+        try {
+            const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+                navigator.geolocation.getCurrentPosition(resolve, reject, {
+                    enableHighAccuracy: true,
+                    timeout: 10000
+                });
+            });
+            setLocation({
+                lat: position.coords.latitude,
+                lng: position.coords.longitude,
+                cityName: undefined
+            });
+
+            router.push(`/search?lat=${position.coords.latitude}&lng=${position.coords.longitude}`);
+            toast.success("📍 Using your current location");
+        } catch {
+            toast.error("Could not get your location");
+        } finally {
+            setIsLoadingGPS(false);
+        }
+    };
+
+    const handleSelectCity = (city: { name: string; lat: number; lng: number; placeId: string }) => {
+        setCity({ id: city.placeId, name: city.name, lat: city.lat, lng: city.lng });
+        router.push(`/search?lat=${city.lat}&lng=${city.lng}&cityId=${city.placeId}`);
+        toast.success(`📍 Location set to ${city.name}`);
+    };
+
+    const handleClearLocation = () => {
+        setLocation({ lat: 48.1486, lng: 17.1077, cityName: "Bratislava" });
+        toast.success("📍 Location cleared");
+    };
 
     const handleLogout = async () => {
         try {
             await signOut(auth);
             toast.success("Logged out");
             window.location.reload();
-        } catch (error) {
+        } catch {
             toast.error("Logout failed");
         }
     };
@@ -182,17 +225,21 @@ export default function MobileSearch({
 
                 {/* Categories & Search Bar (Always Visible) */}
                 <div className="bg-white p-4 space-y-3 pb-safe-area shadow-[0_-1px_10px_rgba(0,0,0,0.05)]">
+                    {/* Location Toggle & Radius Slider Row */}
+                    {/* Mobile Location Popover (Top) */}
+                    <div className="flex items-center justify-between pb-2">
+                        <LocationPopover
+                            selectedCity={cityName ? { name: cityName, lat: 0, lng: 0 } : null}
+                            onSelectCity={handleSelectCity}
+                            onUseGPS={handleUseGPS}
+                            onClear={handleClearLocation}
+                            isLoadingGPS={isLoadingGPS}
+                            openDirection="up"
+                        />
+                    </div>
+
                     {/* Categories - Horizontal Scroll */}
                     <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1 -mx-4 px-4 scroll-smooth">
-                        {/* Use Location Button as first chip */}
-                        <button
-                            onClick={onUseLocation}
-                            className="flex items-center gap-1 bg-primary/10 text-primary px-3 py-2 rounded-full whitespace-nowrap text-xs font-bold hover:bg-primary/20 transition-colors shrink-0"
-                        >
-                            <MapPin className="h-3 w-3" />
-                            Near Me
-                        </button>
-
                         {APP_CATEGORIES.map(cat => (
                             <button
                                 key={cat.id}

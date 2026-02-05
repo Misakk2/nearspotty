@@ -28,10 +28,12 @@ service cloud.firestore {
     // Restaurants/Websites
     match /websites/{websiteId} {
       allow read: if true; // Publicly viewable
-      allow write: if isAuthenticated() && (
-        (resource == null && request.resource.data.ownerId == request.auth.uid) || 
-        (resource != null && resource.data.ownerId == request.auth.uid)
-      );
+      
+      // CREATE: Allow if user sets themselves as owner
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid;
+      
+      // UPDATE/DELETE: Allow if user IS the owner
+      allow update, delete: if isAuthenticated() && resource.data.ownerId == request.auth.uid;
     }
 
     // Reservations

@@ -58,7 +58,7 @@ export const useSearchStore = create<SearchState>()(
                 scores: { ...state.scores, ...newScores }
             })),
 
-            setLocation: (location) => set((state) => ({
+            setLocation: (location) => set(() => ({
                 center: { lat: location.lat, lng: location.lng },
                 ...(location.cityId && { cityId: location.cityId }),
                 ...(location.cityName && { cityName: location.cityName })
@@ -89,7 +89,7 @@ export const useSearchStore = create<SearchState>()(
             }),
 
             // Wipes query, places, and filters (Clean Slate)
-            resetSearch: () => set((state) => ({
+            resetSearch: () => set(() => ({
                 places: [],
                 scores: {},
                 selectedCategory: null,
@@ -104,6 +104,7 @@ export const useSearchStore = create<SearchState>()(
             name: 'search-storage',
             storage: createJSONStorage(() => localStorage),
             version: 1, // Bump this to invalidate old cache
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             migrate: (persistedState: any, version: number) => {
                 if (version === 0) {
                     // if the stored value is in version 0, we clear it (return default)

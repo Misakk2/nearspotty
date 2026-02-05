@@ -13,12 +13,12 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
         }
         const token = authHeader.split("Bearer ")[1];
-        const decodedToken = await import("@/lib/firebase-admin").then(m => m.adminAuth.verifyIdToken(token));
+        const decodedToken = await import("@/lib/firebase-admin").then(m => m.getAdminAuth().verifyIdToken(token));
         const userId = decodedToken.uid;
 
         // 2. Get User from Firestore
-        const { adminDb } = await import("@/lib/firebase-admin");
-        const userDoc = await adminDb.collection("users").doc(userId).get();
+        const { getAdminDb } = await import("@/lib/firebase-admin");
+        const userDoc = await getAdminDb().collection("users").doc(userId).get();
         const userData = userDoc.data();
 
         if (!userData?.stripeCustomerId) {

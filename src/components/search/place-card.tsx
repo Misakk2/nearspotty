@@ -1,5 +1,5 @@
 import { Place } from "@/types/place";
-import { Star, MapPin, Lock, Crown, Clock, AlertTriangle } from "lucide-react";
+import { Star, MapPin, Lock, Clock, AlertTriangle } from "lucide-react";
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -23,6 +23,8 @@ export default function PlaceCard({
     place,
     onClick,
     onBeforeNavigate,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    preferences,
     score,
     scoringLoading = false,
     limitReached = false,
@@ -56,7 +58,7 @@ export default function PlaceCard({
 
     const setPlace = usePlaceStore((state) => state.setPlace);
 
-    const handleClick = (e: React.MouseEvent) => {
+    const handleClick = () => {
         // Cache the place data instantly for 0ms navigation
         setPlace(place);
 

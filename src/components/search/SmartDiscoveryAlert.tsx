@@ -1,7 +1,7 @@
 
 "use client";
 
-import { AlertTriangle, Compass, MapPin } from "lucide-react";
+import { Compass, MapPin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface SmartDiscoveryAlertProps {
@@ -20,7 +20,7 @@ export function SmartDiscoveryAlert({ keyword, message, onIncreaseRadius }: Smar
                 <div className="flex-1 space-y-2">
                     <div>
                         <h4 className="font-semibold text-amber-900 flex items-center gap-2">
-                            Sorry, we couldn't find "{keyword}"
+                            Sorry, we couldn&apos;t find &quot;{keyword}&quot;
                         </h4>
                         <p className="text-sm text-amber-800/90 mt-1 leading-relaxed">
                             {message || `We didn't find any business matching "${keyword}" in this area.`}

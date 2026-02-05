@@ -1,13 +1,25 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
+    
+    // --- Public Assets (Places Cache) ---
+    // Explicitly allow public read for cached place photos
+    match /places/{allPaths=**} {
+      allow read: if true;
+    }
+
+    // --- User Profile Images ---
     match /users/{userId}/{allPaths=**} {
       allow read: if request.auth != null;
       allow write: if request.auth != null && request.auth.uid == userId;
     }
+
+    // --- Website Assets ---
     match /websites/{websiteId}/{allPaths=**} {
       allow read: if true;
-      allow write: if request.auth != null; // Ideally check if user is owner of websiteId in Firestore
+      // Ideally check if user is owner of websiteId in Firestore using a function
+      // For now, at least ensure they are authenticated.
+      allow write: if request.auth != null; 
     }
   }
 }

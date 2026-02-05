@@ -6,11 +6,13 @@ import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/components/auth-provider";
 import { PremiumBadge } from "@/components/ui/PremiumBadge";
 import { Button } from "@/components/ui/button";
-import { Utensils, LayoutDashboard, User, Search, LogOut, ChevronRight, Menu, X, Calendar, Globe, MapPin } from "lucide-react";
+import { Utensils, User, Search, LogOut, Calendar, Globe } from "lucide-react";
 import { auth } from "@/lib/firebase";
 import { signOut } from "firebase/auth";
 import toast from "react-hot-toast";
 import { useI18n } from "@/components/i18n-provider";
+import { LocationPopover } from "@/components/navigation/LocationPopover";
+import { useSearchStore } from "@/hooks/useSearchState";
 
 export default function AppNavbar() {
     const pathname = usePathname();
@@ -18,9 +20,47 @@ export default function AppNavbar() {
     const { locale, setLocale } = useI18n();
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
+    const [isLoadingGPS, setIsLoadingGPS] = useState(false);
     const { user, userRole, subscriptionTier } = useAuth();
 
+    // Shared search state
+    const { cityName, setCity, setLocation } = useSearchStore();
+
     const isBusinessPage = pathname.startsWith("/for-restaurants") || pathname.startsWith("/dashboard");
+
+    const handleUseGPS = async () => {
+        setIsLoadingGPS(true);
+        try {
+            const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+                navigator.geolocation.getCurrentPosition(resolve, reject, {
+                    enableHighAccuracy: true,
+                    timeout: 10000
+                });
+            });
+            setLocation({
+                lat: position.coords.latitude,
+                lng: position.coords.longitude,
+                cityName: undefined
+            });
+            router.push(`/search?lat=${position.coords.latitude}&lng=${position.coords.longitude}`);
+            toast.success("📍 Using your current location");
+        } catch {
+            toast.error("Could not get your location");
+        } finally {
+            setIsLoadingGPS(false);
+        }
+    };
+
+    const handleSelectCity = (city: { name: string; lat: number; lng: number; placeId: string }) => {
+        setCity({ id: city.placeId, name: city.name, lat: city.lat, lng: city.lng });
+        router.push(`/search?lat=${city.lat}&lng=${city.lng}&cityId=${city.placeId}`);
+        toast.success(`📍 Location set to ${city.name}`);
+    };
+
+    const handleClearLocation = () => {
+        setLocation({ lat: 48.1486, lng: 17.1077, cityName: "Bratislava" });
+        toast.success("📍 Location cleared");
+    };
 
     const handleLogout = async () => {
         try {
@@ -72,18 +112,16 @@ export default function AppNavbar() {
                 />
             </form>
 
-            <Button
-                variant="outline"
-                size="sm"
-                className="hidden md:flex gap-2 mr-4 rounded-full border-gray-200 hover:border-primary hover:text-primary transition-colors"
-                onClick={() => {
-                    // Redirect to search with action flag
-                    router.push("/search?action=use_location");
-                }}
-            >
-                <MapPin className="h-4 w-4" />
-                <span className="hidden lg:inline">Near Me</span>
-            </Button>
+            {/* Location Popover */}
+            <div className="mr-4">
+                <LocationPopover
+                    selectedCity={cityName ? { name: cityName, lat: 0, lng: 0 } : null}
+                    onSelectCity={handleSelectCity}
+                    onUseGPS={handleUseGPS}
+                    onClear={handleClearLocation}
+                    isLoadingGPS={isLoadingGPS}
+                />
+            </div>
 
             {/* 3. Right Side - Profile Dropdown */}
             <div className="flex items-center gap-2">

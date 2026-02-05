@@ -79,7 +79,7 @@ export default function CategoryGrid({
                 <div className="mt-8 p-4 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center gap-3 text-amber-900 animate-in fade-in slide-in-from-bottom-2">
                     <Lock className="h-5 w-5 flex-shrink-0" />
                     <p className="text-sm font-medium">
-                        You've reached your free search limit. <span className="font-bold underline cursor-pointer">Upgrade to Premium</span> to continue.
+                        You&apos;ve reached your free search limit. <span className="font-bold underline cursor-pointer">Upgrade to Premium</span> to continue.
                     </p>
                 </div>
             )}

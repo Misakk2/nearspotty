@@ -9,8 +9,6 @@
 
 import { db, auth } from "@/lib/firebase"; // Added auth
 import { doc, getDoc, setDoc, collection, query, where, getDocs, limit } from "firebase/firestore";
-import { signInAnonymously } from "firebase/auth";
-
 // Define __app_id on window
 declare global {
     interface Window {

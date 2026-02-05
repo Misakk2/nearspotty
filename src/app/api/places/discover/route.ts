@@ -8,7 +8,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { adminDb } from "@/lib/firebase-admin";
+import { getAdminDb } from "@/lib/firebase-admin";
 import { createGridKey, placeToCache, cacheToPlace, CachedPlace, PlacesCacheEntry } from "@/types/cached-places";
 import { Place } from "@/types/place";
 
@@ -37,7 +37,7 @@ export async function GET(request: NextRequest) {
 
     try {
         // Check Firestore cache first
-        const cacheRef = adminDb.collection("cached_places_grid").doc(gridKey);
+        const cacheRef = getAdminDb().collection("cached_places_grid").doc(gridKey);
         const cacheDoc = await cacheRef.get();
 
         if (cacheDoc.exists) {
@@ -126,6 +126,7 @@ export async function GET(request: NextRequest) {
         };
 
         // Map v1 response structure to our Place interface
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const places: Place[] = (data.places || []).map((p: any) => ({
             place_id: p.id,
             name: p.displayName?.text || p.id,
@@ -139,6 +140,7 @@ export async function GET(request: NextRequest) {
                     lng: p.location?.longitude || 0
                 }
             },
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             photos: p.photos?.map((photo: any) => ({
                 name: photo.name, // Resource Name for V1
                 width: photo.widthPx,
@@ -155,6 +157,7 @@ export async function GET(request: NextRequest) {
             } : undefined,
 
             // Map V1 Reviews to Legacy Format
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             reviews: p.reviews?.map((r: any) => ({
                 author_name: r.authorAttribution?.displayName || "Anonymous",
                 rating: r.rating,

@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
-import { getAuth, connectAuthEmulator } from "firebase/auth";
+import { getAuth, connectAuthEmulator, browserLocalPersistence, setPersistence } from "firebase/auth";
 import { connectFirestoreEmulator, initializeFirestore } from "firebase/firestore";
 import { getFunctions } from "firebase/functions";
 import { getStorage } from "firebase/storage";
@@ -19,6 +19,13 @@ const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
 const auth = getAuth(app);
 
+// Use localStorage persistence to avoid IndexedDB race conditions (Safari fix)
+if (typeof window !== "undefined") {
+  setPersistence(auth, browserLocalPersistence).catch((err) => {
+    console.warn("[Firebase] Persistence setup failed (non-critical):", err);
+  });
+}
+
 // For Safari compatibility with Firestore emulators
 const db = initializeFirestore(app, {
   experimentalAutoDetectLongPolling: true,
@@ -27,7 +34,7 @@ const db = initializeFirestore(app, {
 const functions = getFunctions(app);
 const storage = getStorage(app);
 
-if (process.env.NODE_ENV === "development" && typeof window !== "undefined") {
+if (process.env.NODE_ENV === "development" && typeof window !== "undefined" && process.env.NEXT_PUBLIC_USE_EMULATORS === "true") {
   const host = window.location.hostname;
   try {
     // Only connect if not already connected

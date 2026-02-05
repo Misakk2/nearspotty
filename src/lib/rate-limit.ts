@@ -1,4 +1,4 @@
-import { adminDb } from "./firebase-admin";
+import { getAdminDb } from "./firebase-admin";
 
 interface RateLimitConfig {
     limit: number;      // Max requests
@@ -13,10 +13,10 @@ interface RateLimitConfig {
  */
 export async function checkRateLimit(identifier: string, config: RateLimitConfig) {
     const now = Date.now();
-    const docRef = adminDb.collection("rate_limits").doc(identifier);
+    const docRef = getAdminDb().collection("rate_limits").doc(identifier);
 
     try {
-        const result = await adminDb.runTransaction(async (transaction) => {
+        const result = await getAdminDb().runTransaction(async (transaction) => {
             const doc = await transaction.get(docRef);
 
             if (!doc.exists) {

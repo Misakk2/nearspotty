@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { adminAuth } from "@/lib/firebase-admin";
+import { getAdminAuth } from "@/lib/firebase-admin";
 import { checkUserLimit } from "@/lib/user-limits";
 
 export const dynamic = 'force-dynamic';
@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
         let decodedToken;
 
         try {
-            decodedToken = await adminAuth.verifyIdToken(idToken);
+            decodedToken = await getAdminAuth().verifyIdToken(idToken);
         } catch (e) {
             console.error("Token verification failed:", e);
             return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

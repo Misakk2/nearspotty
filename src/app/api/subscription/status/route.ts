@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { adminAuth, adminDb } from "@/lib/firebase-admin";
+import { getAdminAuth, getAdminDb } from "@/lib/firebase-admin";
 /**
  * Subscription Status API
  * 
@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
     let userId: string;
 
     try {
-        const decodedToken = await adminAuth.verifyIdToken(token);
+        const decodedToken = await getAdminAuth().verifyIdToken(token);
         userId = decodedToken.uid;
     } catch (error) {
         console.error("[subscription/status] Token verification failed:", error);
@@ -32,7 +32,7 @@ export async function GET(request: NextRequest) {
 
     // --- 2. Fetch User Data from Firestore ---
     try {
-        const userDoc = await adminDb.collection("users").doc(userId).get();
+        const userDoc = await getAdminDb().collection("users").doc(userId).get();
 
         if (!userDoc.exists) {
             return NextResponse.json({
