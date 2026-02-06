@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { getAdminDb, getAdminAuth } from "@/lib/firebase-admin";
-import { checkUserLimit, incrementUserUsage } from "@/lib/user-limits";
+import { checkUserLimit } from "@/lib/user-limits";
 import crypto from "crypto";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
@@ -145,10 +145,8 @@ export async function POST(request: NextRequest) {
             timestamp: Date.now()
         });
 
-        // 5. BILLING (Increment)
-        if (userId) {
-            await incrementUserUsage(userId);
-        }
+        // Credits are already decremented in checkUserLimit transaction
+        // No need to manually increment here
 
         return NextResponse.json(json);
     } catch (error) {

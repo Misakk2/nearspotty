@@ -43,20 +43,23 @@ export async function GET(request: NextRequest) {
         }
 
         const userData = userDoc.data()!;
-        const tier = userData.tier || userData.subscriptionTier || (userData.plan === 'premium' ? 'premium' : 'free');
-        const usage = userData.usage || userData.aiUsage || { count: 0 };
-        const limit = tier === "premium" ? Infinity : 5;
-        const remaining = tier === "premium" ? Infinity : Math.max(0, 5 - usage.count);
+        const tier: 'free' | 'premium' = userData.tier || 'free';
+        const credits = userData.credits || {
+            remaining: tier === 'premium' ? -1 : 5,
+            used: 0,
+            limit: tier === 'premium' ? -1 : 5,
+            resetDate: new Date().toISOString()
+        };
 
         // --- 3. Determine Display Status (Firestore Only) ---
         // We rely on Webhooks to keep Firestore in sync.
         // This removes the latency of fetching from Stripe on every request.
 
-        // Prioritize nested subscription object, fall back to legacy fields
-        const subscriptionStatus = userData.subscription?.status || userData.subscriptionStatus || "none";
-        const cancelAtPeriodEnd = userData.subscription?.cancel_at_period_end ?? userData.cancelAtPeriodEnd ?? false;
-        const currentPeriodEnd = userData.subscription?.current_period_end || userData.currentPeriodEnd;
-        const cancelAt = userData.subscription?.cancel_at || userData.cancelAt;
+        // Prioritize new subscription object structure
+        const subscriptionStatus = userData.subscription?.status || "none";
+        const cancelAtPeriodEnd = userData.subscription?.cancelAtPeriodEnd ?? false;
+        const currentPeriodEnd = userData.subscription?.currentPeriodEnd;
+        const cancelAt = userData.subscription?.cancelAt;
 
         let displayStatus = subscriptionStatus;
         if (cancelAtPeriodEnd && subscriptionStatus === "active") {
@@ -66,15 +69,15 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({
             tier,
             status: displayStatus,
-            stripeSubscription: null, // Removed for performance
+            stripeSubscription: null,
             currentPeriodEnd: currentPeriodEnd,
             cancelAtPeriodEnd: cancelAtPeriodEnd,
             cancelAt: cancelAt,
-            usage: {
-                count: usage.count,
-                remaining,
-                limit: limit === Infinity ? "unlimited" : limit,
-                lastResetDate: usage.lastResetDate,
+            credits: {
+                remaining: credits.remaining,
+                used: credits.used,
+                limit: credits.limit === -1 ? "unlimited" : credits.limit,
+                resetDate: credits.resetDate
             },
             email: userData.email,
             displayName: userData.displayName || userData.name,

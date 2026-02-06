@@ -63,5 +63,15 @@ service cloud.firestore {
     match /restaurant_scores/{any} {
       allow read, write: if false; // Server-only (Admin SDK bypasses)
     }
+
+    // Restaurant Entity - supports caching and owner uploads
+    match /restaurants/{restaurantId} {
+      // Public read for cached images
+      allow read: if true;
+      
+      // Only authenticated users can write (claim ownership,  upload images)
+      allow create, update: if request.auth != null;
+      allow delete: if request.auth != null;
+    }
   }
 }

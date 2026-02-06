@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/components/auth-provider";
 import { PremiumBadge } from "@/components/ui/PremiumBadge";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ import { useSearchStore } from "@/hooks/useSearchState";
 export default function AppNavbar() {
     const pathname = usePathname();
     const router = useRouter();
+    const searchParams = useSearchParams();
     const { locale, setLocale } = useI18n();
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
@@ -25,6 +26,19 @@ export default function AppNavbar() {
 
     // Shared search state
     const { cityName, setCity, setLocation } = useSearchStore();
+
+    // GPS Mode Detection: lat/lng in URL without cityId = GPS mode
+    const urlLat = searchParams.get("lat");
+    const urlLng = searchParams.get("lng");
+    const urlCityId = searchParams.get("cityId");
+    const isGPSMode = Boolean(urlLat && urlLng && !urlCityId);
+
+    // Dynamic location display
+    const getLocationDisplayName = (): string | null => {
+        if (isGPSMode) return "📍 Current Location";
+        if (cityName) return cityName;
+        return null; // "Select Location" fallback
+    };
 
     const isBusinessPage = pathname.startsWith("/for-restaurants") || pathname.startsWith("/dashboard");
 
@@ -95,10 +109,31 @@ export default function AppNavbar() {
             {/* 2. Desktop Search Input */}
             <form onSubmit={(e) => {
                 e.preventDefault();
-                if (searchQuery.trim()) {
-                    // Navigate to search page with query parameter
-                    router.push(`/search?keyword=${encodeURIComponent(searchQuery)}`);
+                if (!searchQuery.trim()) return;
+
+                // Build query params with location context
+                const params = new URLSearchParams();
+                params.set('keyword', searchQuery.trim());
+
+                // Get location context from URL OR store
+                const effectiveLat = urlLat || useSearchStore.getState().center.lat;
+                const effectiveLng = urlLng || useSearchStore.getState().center.lng;
+                const effectiveCityId = urlCityId || useSearchStore.getState().cityId;
+                const effectiveRadius = searchParams.get('radius') || '5000';
+
+                params.set('radius', effectiveRadius);
+
+                if (effectiveCityId) {
+                    params.set('cityId', effectiveCityId);
                 }
+
+                if (effectiveLat && effectiveLng) {
+                    params.set('lat', effectiveLat.toString());
+                    params.set('lng', effectiveLng.toString());
+                }
+
+                console.log('🚀 Navbar search with context:', params.toString());
+                router.push(`/search?${params.toString()}`);
             }} className="flex-1 max-w-xl mx-8 relative group">
                 <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
                     <Search className="h-4 w-4 text-gray-400 group-focus-within:text-primary transition-colors" />
@@ -112,10 +147,10 @@ export default function AppNavbar() {
                 />
             </form>
 
-            {/* Location Popover */}
+            {/* Location Popover - Dynamic Display */}
             <div className="mr-4">
                 <LocationPopover
-                    selectedCity={cityName ? { name: cityName, lat: 0, lng: 0 } : null}
+                    selectedCity={getLocationDisplayName() ? { name: getLocationDisplayName()!, lat: 0, lng: 0 } : null}
                     onSelectCity={handleSelectCity}
                     onUseGPS={handleUseGPS}
                     onClear={handleClearLocation}

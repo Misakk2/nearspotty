@@ -23,6 +23,8 @@ import { useSearchState } from "@/hooks/useSearchState";
 import { PremiumBadge } from "@/components/ui/PremiumBadge";
 import { CommunicativeLoader } from "@/components/ui/CommunicativeLoader";
 import { SmartDiscoveryAlert } from "@/components/search/SmartDiscoveryAlert";
+import { PioneerOverlay } from "@/components/PioneerOverlay";
+import { DecisionView, DecisionChoices } from "@/components/search/DecisionView";
 
 // Score map type for storing scores by place_id
 type ScoreMap = Record<string, GeminiScore>;
@@ -73,6 +75,15 @@ export default function SearchPage() {
     const [discoveryMessage, setDiscoveryMessage] = useState<string | null>(null);
     const [relevanceStatus, setRelevanceStatus] = useState<string>("match");
     const [currentRadius, setCurrentRadius] = useState(5000);
+
+    // Pioneer Bonus Overlay
+    const [showPioneerOverlay, setShowPioneerOverlay] = useState(false);
+
+    // Decision Point State (Lazy Decision Point)
+    const [decisionData, setDecisionData] = useState<{
+        message: string;
+        choices: DecisionChoices;
+    } | null>(null);
 
     // Location local UI state
     const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
@@ -181,11 +192,11 @@ export default function SearchPage() {
                     const userSnap = await getDoc(userRef);
                     if (userSnap.exists()) {
                         const data = userSnap.data();
-                        const tier = data.tier || data.subscriptionTier || (data.plan === 'premium' ? 'premium' : 'free');
+                        const tier: 'free' | 'premium' = data.tier || 'free';
                         setSubscriptionTier(tier);
 
-                        const usage = data.usage || data.aiUsage || { count: 0 };
-                        const remaining = tier === 'premium' ? Infinity : Math.max(0, 5 - usage.count);
+                        const credits = data.credits || { remaining: 5, used: 0, limit: 5 };
+                        const remaining = tier === 'premium' ? -1 : credits.remaining;
                         setRemainingScans(remaining);
                         setLimitReached(remaining === 0 && tier === 'free');
                     }
@@ -208,6 +219,7 @@ export default function SearchPage() {
         setDiscoveryMessage(null); // Reset discovery
         setRelevanceStatus("match");
         setCurrentRadius(radius); // Sync local state
+        setDecisionData(null); // Clear any previous decision point
 
         try {
             const token = await user.getIdToken();
@@ -249,12 +261,36 @@ export default function SearchPage() {
                 return;
             }
 
-            if (data.usage) {
+            // Sync credits from API response (primary source of truth)
+            if (data.credits) {
+                setRemainingScans(data.credits.remaining);
+                setSubscriptionTier(data.credits.tier as 'free' | 'premium');
+                if (data.credits.remaining === 0 && data.credits.tier === 'free') {
+                    setLimitReached(true);
+                }
+            } else if (data.usage) {
+                // Fallback to legacy usage format
                 setRemainingScans(data.usage.remaining);
                 setSubscriptionTier(data.usage.tier);
                 if ((data.usage.remaining === 0 && data.usage.tier === 'free') || data.usage.limitReached) {
                     setLimitReached(true);
                 }
+            }
+
+            // Pioneer Bonus celebration
+            if (data.pioneerBonus) {
+                setShowPioneerOverlay(true);
+            }
+
+            // Handle DECISION_REQUIRED status (Lazy Decision Point)
+            if (data.status === 'DECISION_REQUIRED' && data.choices) {
+                console.log('[SearchPage] Decision point triggered:', data.choices);
+                setDecisionData({
+                    message: data.message || 'No exact match found in your area.',
+                    choices: data.choices
+                });
+                setLoading(false);
+                return; // Don't process normal results
             }
 
             if (data.results) {
@@ -619,7 +655,25 @@ export default function SearchPage() {
 
                             {loading && <CommunicativeLoader />}
 
-                            {!loading && relevanceStatus === "no_exact_match" && (
+                            {/* Decision Point UI (Lazy Decision Point) */}
+                            {!loading && decisionData && (
+                                <DecisionView
+                                    message={decisionData.message}
+                                    choices={decisionData.choices}
+                                    isLoading={loading}
+                                    onSelectSurvival={(id) => {
+                                        // Navigate to place detail page
+                                        router.push(`/place/${id}`);
+                                    }}
+                                    onExpandRadius={(newRadius) => {
+                                        // Trigger new search with expanded radius
+                                        setDecisionData(null);
+                                        fetchPlaces(undefined, searchQuery || undefined, undefined, newRadius);
+                                    }}
+                                />
+                            )}
+
+                            {!loading && !decisionData && relevanceStatus === "no_exact_match" && (
                                 <SmartDiscoveryAlert
                                     keyword={searchQuery}
                                     message={discoveryMessage}
@@ -695,6 +749,10 @@ export default function SearchPage() {
                         onSelectLocation={handleLocationSelect}
                         onRetryGPS={handleUseLocation}
                         hideGPSRetry={gpsAttempted}
+                    />
+                    <PioneerOverlay
+                        show={showPioneerOverlay}
+                        onComplete={() => setShowPioneerOverlay(false)}
                     />
                 </div>
             </RoleGuard>

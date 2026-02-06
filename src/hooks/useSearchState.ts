@@ -34,9 +34,9 @@ export interface SearchState {
 const DEFAULT_STATE = {
     places: [],
     scores: {},
-    center: { lat: 48.1486, lng: 17.1077 }, // Bratislava default
-    cityId: "ChIJl2HKCjaJbEcRaEOI_Yi3d1w",
-    cityName: "Bratislava",
+    center: { lat: 48.1486, lng: 17.1077 }, // Default center (can be overridden)
+    cityId: null,        // No default city - user must select or use GPS
+    cityName: null,      // FIX: Removed hardcoded "Bratislava" 
     selectedCategory: null,
     scrollPosition: 0,
     searchQuery: "",

@@ -10,7 +10,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { getAdminDb } from "@/lib/firebase-admin";
 import { checkRateLimit } from "@/lib/rate-limit";
-import { checkUserLimit, incrementUserUsage } from "@/lib/user-limits";
+import { checkUserLimit } from "@/lib/user-limits";
 import crypto from "crypto";
 import { GeminiScore } from "@/types";
 
@@ -64,7 +64,6 @@ export async function POST(request: NextRequest) {
                     error: "AI check limit reached",
                     limitReached: true,
                     tier: usageStatus.tier,
-                    count: usageStatus.count,
                     remaining: usageStatus.remaining
                 }, { status: 403 });
             }
@@ -200,10 +199,8 @@ Output Schema:
                 });
             }
 
-            // Increment usage
-            if (userId && uncachedPlaces.length > 0) {
-                await incrementUserUsage(userId);
-            }
+            // Credits already decremented in checkUserLimit
+            // No manual increment needed
 
             return NextResponse.json({
                 results,

@@ -31,12 +31,14 @@ export async function GET(request: NextRequest) {
 
         return NextResponse.json({
             plan: status.tier, // Mapped to 'plan' as requested
-            usage: status.count, // Mapped to 'usage' as requested
+            usage: status.used, // Current usage count
             limit: status.limit,
             remaining: status.remaining,
             // Keeping these for internal consistency and debugging
+            tier: status.tier,
+            canSearch: status.canSearch,
             limitReached: status.limitReached,
-            lastReset: status.lastResetDate
+            resetDate: status.resetDate
         });
 
     } catch (error) {

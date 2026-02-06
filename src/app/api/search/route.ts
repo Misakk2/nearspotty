@@ -1,10 +1,37 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAdminAuth } from "@/lib/firebase-admin";
-import { getCache, setCache, createCacheKey } from "@/lib/cache-utils";
-import { checkUserLimit, reserveUserCredit } from "@/lib/user-limits";
-import { scorePlacesWithDeepContext } from "@/lib/gemini"; // Preserving AI Logic
+import { getAdminAuth, getAdminDb } from "@/lib/firebase-admin";
+import { reserveUserCredit, refundUserCredit } from "@/lib/user-limits";
+import { scorePlacesWithDeepContext, scoutTopCandidates, PlaceWithContext, LightCandidate } from "@/lib/gemini";
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+import { getOrFetchRestaurant, resolveRestaurantImage, saveRestaurantToCache, getEnrichedRestaurants } from "@/lib/restaurant-cache";
+import type { Restaurant, UserCredits } from "@/types";
+import geohash from "ngeohash";
 
-const LIST_FIELD_MASK = [
+/**
+ * Search & Ranking Pipeline - "Two-Stage AI Funnel" Strategy
+ * 
+ * Flow:
+ * 1. findLightCandidates() -> Get 20 Place IDs with LIGHT fields (cheap)
+ * 2. scoutTopCandidates()  -> Gemini selects TOP 6 (dietary-aware)
+ * 3. enrichWinners()       -> Fetch RICH details for 6 only (expensive)
+ * 4. Transaction           -> Deduct credit, run deep scoring
+ * 5. Return TOP 5 results + credit state
+ * 
+ * COST SAVINGS: ~70% reduction (6 rich fetches vs 20)
+ */
+
+// Stage 1: Light fields for discovery (~$0.003/call)
+const LIGHT_FIELD_MASK = [
+    "places.id",
+    "places.displayName",
+    "places.types",
+    "places.rating",
+    "places.userRatingCount",
+    "places.location"
+].join(",");
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const RICH_FIELD_MASK = [
     "places.id",
     "places.displayName",
     "places.formattedAddress",
@@ -13,108 +40,251 @@ const LIST_FIELD_MASK = [
     "places.rating",
     "places.userRatingCount",
     "places.priceLevel",
-    "places.types"
+    "places.types",
+    "places.editorialSummary",
+    "places.reviews",
+    "places.regularOpeningHours"
 ].join(",");
 
-export async function GET(request: NextRequest) {
+const BATCH_SIZE = 20;       // Discovery batch
+const SCOUT_TOP_N = 6;       // AI Scout picks top N for enrichment
+const TOP_RESULTS = 5;       // Final results to user
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const STALE_DAYS = 14;       // Enrichment threshold
+
+// =============================================================================
+// SEARCH INTENT PARSING (NLP Helper)
+// =============================================================================
+
+interface ParsedSearchIntent {
+    cleanKeyword: string;        // Keyword without radius info, for Google & Gemini
+    detectedRadius: number | null; // Radius in METERS (null = use default)
+    hasSuperlative: boolean;     // "best", "najlepšia", "amazing" etc.
+    rawQuery: string;            // Original user query for Gemini context
+}
+
+/**
+ * Parses complex natural language search input.
+ * Extracts radius with unit conversion and detects quality superlatives.
+ * 
+ * @example
+ * parseSearchIntent("pizza 3 miles from me best one ever")
+ * → { cleanKeyword: "pizza best one ever", detectedRadius: 4828.02, hasSuperlative: true, rawQuery: "..." }
+ */
+function parseSearchIntent(rawQuery: string): ParsedSearchIntent {
+    let query = rawQuery.trim();
+    let detectedRadius: number | null = null;
+
+    // --- Regex patterns with unit conversion factors ---
+    const unitPatterns: { pattern: RegExp; factor: number }[] = [
+        // Meters: "500m", "500 m", "500 meters", "500 metrov"
+        {
+            pattern: /(\d+(?:[.,]\d+)?)\s*(m(?:eters?|etrov)?)\b/gi,
+            factor: 1
+        },
+        // Kilometers: "5km", "5 km", "5 kilometers", "5 kilometrov"
+        {
+            pattern: /(\d+(?:[.,]\d+)?)\s*(km|kilometers?|kilometrov?)\b/gi,
+            factor: 1000
+        },
+        // Miles: "3mi", "3 miles", "3 mile", "3 míle", "3 míľ"
+        {
+            pattern: /(\d+(?:[.,]\d+)?)\s*(mi(?:les?)?|míle?|míľ)\b/gi,
+            factor: 1609.34
+        }
+    ];
+
+    // --- Extract and convert radius ---
+    for (const { pattern, factor } of unitPatterns) {
+        const match = pattern.exec(query);
+        if (match) {
+            // Normalize decimal separator: "1,5" → "1.5"
+            const numStr = match[1].replace(",", ".");
+            const value = parseFloat(numStr);
+
+            if (!isNaN(value) && value > 0) {
+                detectedRadius = Math.round(value * factor); // Convert to meters
+                // Remove the radius substring from the query
+                query = query.replace(match[0], " ").trim();
+                console.log(`[SearchIntent] Detected radius: ${value} × ${factor} = ${detectedRadius}m`);
+                break; // Only process first match
+            }
+        }
+    }
+
+    // --- Detect superlatives (quality modifiers) ---
+    const superlativePatterns = [
+        // English
+        /\b(best|amazing|incredible|fantastic|top.?tier|premium|excellent|perfect|outstanding)\b/gi,
+        // Slovak
+        /\b(najlepš[íia]|úžasn[áéýy]|skvel[áéýy]|perfektn[áéýy]|výborn[áéýy]|super|top)\b/gi
+    ];
+
+    const hasSuperlative = superlativePatterns.some(p => p.test(query));
+
+    // --- Clean up the keyword ---
+    // Remove common filler phrases (English & Slovak)
+    const fillerPatterns = [
+        /\b(i want|i need|give me|show me|find me|looking for)\b/gi,
+        /\b(chcem|potrebujem|daj mi|ukáž mi|nájdi mi|hľadám)\b/gi,
+        /\b(from me|near me|close to me|nearby)\b/gi,
+        /\b(odo mňa|blízko mňa|v okolí|v blízkosti)\b/gi,
+        /\b(make it|make them)\b/gi,
+        /\b(nech je to|urob to)\b/gi,
+        /\b(one ever|in my life|of all time)\b/gi,
+        /\b(v živote|aké som mal|zo všetkých)\b/gi
+    ];
+
+    let cleanKeyword = query;
+    for (const filler of fillerPatterns) {
+        cleanKeyword = cleanKeyword.replace(filler, " ");
+    }
+
+    // Normalize whitespace
+    cleanKeyword = cleanKeyword.replace(/\s+/g, " ").trim();
+
+    console.log(`[SearchIntent] Raw: "${rawQuery}" → Clean: "${cleanKeyword}", Radius: ${detectedRadius}m, Superlative: ${hasSuperlative}`);
+
+    return {
+        cleanKeyword,
+        detectedRadius,
+        hasSuperlative,
+        rawQuery
+    };
+}
+
+// =============================================================================
+// STEP 1: LIGHT CANDIDATE DISCOVERY (Cheap Fields Only)
+// =============================================================================
+
+interface LightDiscoveryResult {
+    candidates: LightCandidate[];
+    isPioneer: boolean; // True if this is the first search in this area
+    source: "firestore" | "google" | "hybrid";
+}
+
+/**
+ * Stage 1: Discover up to 20 candidates with LIGHT fields only.
+ * STRICT RADIUS: Uses locationRestriction (not locationBias) + Haversine post-filter.
+ * NO AUTO-EXPANSION: If only 1 result in 200m, return 1 result.
+ */
+async function findLightCandidates(
+    lat: number,
+    lng: number,
+    radius: number,
+    keyword: string
+): Promise<LightDiscoveryResult> {
+    const GOOGLE_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY;
+    if (!GOOGLE_API_KEY) throw new Error("Missing NEXT_PUBLIC_GOOGLE_MAPS_KEY");
+
+    const candidates: LightCandidate[] = [];
+    let isPioneer = false;
+    let source: "firestore" | "google" | "hybrid" = "google";
+
+    // --- Step 1A: Query Firestore cache first ---
     try {
-        // --- 0. Panic Room: Global Crash Prevention ---
-        // Ensure we NEVER crash with HTML.
-        const GOOGLE_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY;
-        const FIREBASE_PROJECT_ID = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+        const hashPrecision = calculateGeohashPrecision(radius);
+        const centerHash = geohash.encode(lat, lng, hashPrecision);
+        const neighbors = geohash.neighbors(centerHash);
+        const searchHashes = [centerHash, ...Object.values(neighbors)];
 
-        if (!GOOGLE_API_KEY) throw new Error("MISSING ENV VAR: NEXT_PUBLIC_GOOGLE_MAPS_KEY");
-        if (!FIREBASE_PROJECT_ID) throw new Error("MISSING ENV VAR: NEXT_PUBLIC_FIREBASE_PROJECT_ID");
+        const db = getAdminDb();
+        const firestoreResults: LightCandidate[] = [];
 
-        // --- 1. Validation & Config ---
-        const { searchParams } = new URL(request.url);
-        const lat = parseFloat(searchParams.get("lat") || "0");
-        const lng = parseFloat(searchParams.get("lng") || "0");
-        const radius = parseFloat(searchParams.get("radius") || "5000");
-        const keyword = searchParams.get("keyword") || "";
-        const cityId = searchParams.get("cityId");
+        // Query each geohash bucket
+        for (const hash of searchHashes) {
+            const snapshot = await db.collection("restaurants")
+                .where("geohash", ">=", hash)
+                .where("geohash", "<", hash + "~")
+                .limit(BATCH_SIZE)
+                .get();
 
-        // --- 2. Gatekeeper: Authentication & Billing ---
-        let userId: string | null = null;
-        const authHeader = request.headers.get("Authorization");
+            for (const doc of snapshot.docs) {
+                const data = doc.data() as Restaurant;
+                const distance = haversineDistance(
+                    lat, lng,
+                    data.details.geometry.location.lat,
+                    data.details.geometry.location.lng
+                );
 
-        if (authHeader?.startsWith("Bearer ")) {
-            try {
-                const token = authHeader.split("Bearer ")[1];
-                const decodedToken = await getAdminAuth().verifyIdToken(token);
-                userId = decodedToken.uid;
-            } catch {
-                console.warn("[Search API] Invalid Token");
+                // STRICT: Only include if within exact radius
+                if (distance <= radius) {
+                    // Apply keyword filter if provided
+                    if (keyword) {
+                        const name = data.details.name.toLowerCase();
+                        const types = data.details.types.join(" ").toLowerCase();
+                        if (!name.includes(keyword.toLowerCase()) && !types.includes(keyword.toLowerCase())) {
+                            continue;
+                        }
+                    }
+                    firestoreResults.push({
+                        place_id: doc.id,
+                        name: data.details.name,
+                        types: data.details.types,
+                        rating: data.details.rating,
+                        userRatingCount: data.details.userRatingCount,
+                        location: {
+                            lat: data.details.geometry.location.lat,
+                            lng: data.details.geometry.location.lng
+                        },
+                        distance
+                    });
+                }
             }
         }
 
-        // --- 3. Cache Strategy ---
-        // Bonus: Cache HITS do NOT consume quota
-        let cacheKey: string;
-        let cacheCollection = "places_search_cache_v2";
+        // Sort by distance and take top results
+        firestoreResults.sort((a, b) => (a.distance || 0) - (b.distance || 0));
+        const firestoreCandidates = firestoreResults.slice(0, BATCH_SIZE);
+        candidates.push(...firestoreCandidates);
 
-        if (cityId) {
-            cacheKey = `v2:${cityId}:${keyword || 'all'}`.toLowerCase();
-            cacheCollection = "places_city_cache_v2";
-        } else {
-            cacheKey = `v2:${createCacheKey({ lat, lng, radius, keyword })}`;
+        console.log(`[Light] Firestore returned ${firestoreCandidates.length} cached results within ${radius}m`);
+
+        if (firestoreCandidates.length >= BATCH_SIZE) {
+            return { candidates: candidates.slice(0, BATCH_SIZE), isPioneer: false, source: "firestore" };
         }
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const cachedData = await getCache<any>(cacheCollection, cacheKey);
+        source = firestoreCandidates.length > 0 ? "hybrid" : "google";
+        isPioneer = firestoreCandidates.length === 0;
 
-        if (cachedData) {
-            // Cache hit! Return data with CURRENT user credits (no deduction).
-            let currentStatus = null;
-            if (userId) {
-                currentStatus = await checkUserLimit(userId);
-            }
-            return NextResponse.json({
-                ...cachedData,
-                creditsRemaining: currentStatus?.remaining ?? 5,
-                mode: currentStatus?.tier ?? 'free',
-                source: "cache"
-            });
-        }
+    } catch (err) {
+        console.warn("[Light] Firestore cache query failed:", err);
+        isPioneer = true;
+    }
 
-        // --- 4. Reserve Credit (Transaction) ---
-        // On Cache MISS, we strictly reserve credit via transaction BEFORE fetching.
-        let reservedStatus: { authorized: boolean; tier: 'free' | 'premium'; remaining: number } | null = null;
-
-        if (userId) {
-            reservedStatus = await reserveUserCredit(userId);
-
-            if (!reservedStatus.authorized) {
-                return NextResponse.json({
-                    error: "Monthly limit reached",
-                    code: "LIMIT_REACHED",
-                    mode: 'free',
-                    tier: 'free'
-                }, { status: 402 });
-            }
-        }
-
-        // --- 4. Fetch (Costly Operation) ---
-        console.log(`[Search API] MISS ${cacheKey}. Fetching Google V1.`);
+    // --- Step 1B: Fill remainder from Google Places API ---
+    const remaining = BATCH_SIZE - candidates.length;
+    if (remaining > 0) {
+        console.log(`[Light] Fetching ${remaining} more from Google Places API (STRICT radius ${radius}m)...`);
 
         let endpoint = "https://places.googleapis.com/v1/places:searchNearby";
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const requestBody: any = {
-            maxResultCount: 20
-        };
+        const requestBody: any = { maxResultCount: BATCH_SIZE };
+
+        // CRITICAL FIX: searchText uses locationBias (supports circle)
+        // searchNearby uses locationRestriction (also supports circle)
+        // Both have Haversine post-filter for STRICT enforcement
+
+        // Google API max radius is 50km - cap it for API call, but keep original for post-filter
+        const apiRadius = Math.min(radius, 50000);
+        if (radius > 50000) {
+            console.log(`[Light] User requested ${radius}m, but Google API max is 50km. Using 50km for API, ${radius}m for post-filter.`);
+        }
 
         if (keyword) {
             endpoint = "https://places.googleapis.com/v1/places:searchText";
             requestBody.textQuery = keyword;
             if (lat !== 0 && lng !== 0) {
+                // searchText: Use locationBias (locationRestriction only supports rectangle)
                 requestBody.locationBias = {
-                    circle: { center: { latitude: lat, longitude: lng }, radius }
+                    circle: { center: { latitude: lat, longitude: lng }, radius: apiRadius }
                 };
             }
         } else {
             requestBody.includedTypes = ["restaurant"];
+            // searchNearby: locationRestriction with circle is valid
             requestBody.locationRestriction = {
-                circle: { center: { latitude: lat, longitude: lng }, radius }
+                circle: { center: { latitude: lat, longitude: lng }, radius: apiRadius }
             };
         }
 
@@ -123,101 +293,728 @@ export async function GET(request: NextRequest) {
             headers: {
                 "Content-Type": "application/json",
                 "X-Goog-Api-Key": GOOGLE_API_KEY,
-                "X-Goog-FieldMask": LIST_FIELD_MASK
+                "X-Goog-FieldMask": LIGHT_FIELD_MASK
             },
             body: JSON.stringify(requestBody)
         });
 
         if (!googleRes.ok) {
-            throw new Error(`Google V1 Error: ${googleRes.status} ${await googleRes.text()}`);
+            const errorText = await googleRes.text();
+            console.error(`[Light] Google API error: ${googleRes.status}`, errorText);
+            // Return what we have from Firestore if Google fails
+            if (candidates.length > 0) {
+                return { candidates, isPioneer, source: "firestore" };
+            }
+            throw new Error(`Google Places API error: ${googleRes.status}`);
         }
 
         const googleData = await googleRes.json();
-
-        // --- 5. Transform (Proxy URLs Only) ---
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const rawPlaces = (googleData.places || []).map((p: any) => {
-            const photoRef = p.photos?.[0]?.name;
-            const placeId = p.id;
+        const googlePlaces: any[] = googleData.places || [];
 
-            // Generate Proxy URL immediately
-            const proxyPhotoUrl = photoRef
-                ? `/api/images/proxy?ref=${encodeURIComponent(photoRef)}&id=${placeId}`
-                : null; // Frontend handles null
+        // =====================================================================
+        // AGGRESSIVE CACHING: Save ALL places BEFORE filtering by radius
+        // This maximizes ROI on expensive Google API calls
+        // =====================================================================
 
-            return {
-                place_id: placeId,
-                name: p.displayName?.text || "Unknown",
-                formatted_address: p.formattedAddress,
-                geometry: {
-                    location: {
-                        lat: p.location?.latitude || 0,
-                        lng: p.location?.longitude || 0
-                    }
-                },
-                rating: p.rating,
-                user_ratings_total: p.userRatingCount,
-                types: p.types,
-                price_level: mapPriceLevel(p.priceLevel),
-                imageSrc: proxyPhotoUrl, // Strict Proxy
-                proxyPhotoUrl: proxyPhotoUrl
-            };
+        console.log(`[Light] Received ${googlePlaces.length} places from Google, caching ALL...`);
+
+        // 1. CACHE ALL - Even if outside user's radius, save for future searches
+        const cachePromises = googlePlaces.map(async (place) => {
+            try {
+                await saveRestaurantToCache(place.id, place, undefined);
+            } catch (saveErr) {
+                console.warn(`[Light] Failed to cache ${place.id}:`, saveErr);
+            }
         });
 
-        // --- 6. AI Scoring (Optional Enhancement) ---
-        let finalResults = rawPlaces;
-        if (userId && rawPlaces.length > 0) {
-            try {
-                const scoresMap = await scorePlacesWithDeepContext(rawPlaces, {}, keyword);
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                finalResults = rawPlaces.map((p: any) => ({
+        // Fire and forget caching - don't block the response
+        Promise.all(cachePromises).then(() => {
+            console.log(`[Light] Cached ${googlePlaces.length} places for future searches`);
+        }).catch(() => { });
+
+        // 2. NOW FILTER by user's strict radius
+        const existingIds = new Set(candidates.map(c => c.place_id));
+        let addedCount = 0;
+        let discardedCount = 0;
+
+        for (const place of googlePlaces) {
+            if (existingIds.has(place.id)) continue;
+            if (addedCount >= remaining) break;
+
+            const placeLat = place.location?.latitude || 0;
+            const placeLng = place.location?.longitude || 0;
+            const distance = haversineDistance(lat, lng, placeLat, placeLng);
+
+            // STRICT POST-FILTER: Only include if ACTUALLY within user's radius
+            if (distance > radius) {
+                console.log(`[Light] Discarding ${place.displayName?.text} - ${Math.round(distance)}m > ${radius}m`);
+                discardedCount++;
+                continue;
+            }
+
+            candidates.push({
+                place_id: place.id,
+                name: place.displayName?.text || "Unknown",
+                types: place.types || [],
+                rating: place.rating,
+                userRatingCount: place.userRatingCount,
+                location: { lat: placeLat, lng: placeLng },
+                distance
+            });
+            existingIds.add(place.id);
+            addedCount++;
+        }
+
+        console.log(`[Light] Added ${addedCount} to results (${discardedCount} outside ${radius}m, but ALL were cached)`);
+    }
+
+    // NO AUTO-EXPANSION: Return whatever we found, even if < 20
+    console.log(`[Light] Final: ${candidates.length} candidates within ${radius}m (no expansion)`);
+    return { candidates, isPioneer, source };
+}
+
+// =============================================================================
+// STEP 2: DATA ENRICHMENT
+// =============================================================================
+
+// Note: getEnrichedRestaurants is now imported from @/lib/restaurant-cache
+// It handles the "Light -> Rich" upgrade logic internally.
+// However, we need to map the `Restaurant[]` result to `EnrichedPlace[]` for the transaction.
+
+interface EnrichedPlace extends PlaceWithContext {
+    imageSrc: string | null;
+    formatted_address: string;
+    geometry: { location: { lat: number; lng: number } };
+    user_ratings_total?: number;
+}
+
+/**
+ * Helper to map Cache Restaurant -> EnrichedPlace for Gemini
+ */
+function mapToEnrichedPlaces(restaurants: Restaurant[]): EnrichedPlace[] {
+    return restaurants.map(r => ({
+        place_id: r.placeId,
+        name: r.details.name,
+        location: r.details.geometry.location,
+        types: r.details.types,
+        rating: r.details.rating,
+        price_level: mapPriceLevelToNumber(r.details.priceLevel),
+        vicinity: r.details.address,
+        formatted_address: r.details.formattedAddress || r.details.address,
+        geometry: r.details.geometry,
+        user_ratings_total: r.details.userRatingCount,
+        imageSrc: resolveRestaurantImage(r),
+        editorialSummary: r.details.editorialSummary,
+        reviews: r.details.reviews || [],
+        websiteUri: r.details.website,
+        servesVegetarianFood: r.details.types.includes("vegetarian_restaurant") ||
+            r.details.types.includes("vegan_restaurant")
+    }));
+}
+
+// Helper to handle price level mapping
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mapPriceLevelToNumber(priceLevel: any): number | undefined {
+    if (typeof priceLevel === 'number') return priceLevel;
+    if (priceLevel === 'PRICE_LEVEL_INEXPENSIVE') return 1;
+    if (priceLevel === 'PRICE_LEVEL_MODERATE') return 2;
+    if (priceLevel === 'PRICE_LEVEL_EXPENSIVE') return 3;
+    if (priceLevel === 'PRICE_LEVEL_VERY_EXPENSIVE') return 4;
+    return undefined;
+}
+// =============================================================================
+
+interface SearchTransaction {
+    results: EnrichedPlace[];
+    credits: {
+        remaining: number;
+        limit: number;
+        used: number;
+        tier: "free" | "premium";
+    };
+    geminiSuccess: boolean;
+    pioneerBonus: boolean;
+}
+
+/**
+ * Execute search transaction: deduct credit, score with Gemini, return TOP 5.
+ * @param rawQuery - Original user query for AI context
+ * @param hasSuperlative - Whether user requested "best", "amazing" etc.
+ */
+async function executeSearchTransaction(
+    userId: string,
+    candidates: EnrichedPlace[],
+    userPreferences: UserPreferences,
+    keyword: string,
+    isPioneer: boolean,
+    rawQuery: string = "",
+    hasSuperlative: boolean = false
+): Promise<SearchTransaction> {
+    const db = getAdminDb();
+    const userRef = db.collection("users").doc(userId);
+
+    // --- Reserve credit first ---
+    const reservation = await reserveUserCredit(userId);
+
+    if (!reservation.authorized) {
+        throw { status: 402, message: "Monthly limit reached", code: "LIMIT_REACHED" };
+    }
+
+    let geminiSuccess = true;
+    let scoredResults = candidates;
+
+    // --- Run Gemini Scoring with RAW query for context ---
+    // If user used superlatives, Gemini will prioritize high-quality results
+    const queryForGemini = rawQuery || keyword;
+    console.log(`[Search] Gemini context: "${queryForGemini}", Superlative mode: ${hasSuperlative}`);
+
+    try {
+        const scoresMap = await scorePlacesWithDeepContext(
+            candidates,
+            {
+                ...userPreferences,
+                hasSuperlative,  // Pass to Gemini for quality-first ranking
+                rawQuery: queryForGemini
+            },
+            queryForGemini
+        );
+
+        if (scoresMap.size > 0) {
+            scoredResults = candidates
+                .map((p) => ({
                     ...p,
-                    ai_score: scoresMap.get(p.place_id),
-                    isGeneric: !scoresMap.get(p.place_id)
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                })).sort((a: any, b: any) => (b.ai_score?.matchScore || 0) - (a.ai_score?.matchScore || 0));
-            } catch (e) {
-                console.warn("AI Scoring failed, returning raw results", e);
+                    ai_score: scoresMap.get(p.place_id)
+                }))
+                .filter((p) => p.ai_score && !p.ai_score.safetyFlag) // Remove unsafe
+                .sort((a, b) => (b.ai_score?.matchScore || 0) - (a.ai_score?.matchScore || 0));
+        }
+    } catch (error) {
+        console.error("[Search] Gemini scoring failed:", error);
+        geminiSuccess = false;
+
+        // --- REFUND CREDIT on Gemini failure ---
+        try {
+            await refundUserCredit(userId);
+            console.log(`[Search] Refunded credit for user ${userId} due to Gemini failure`);
+        } catch (refundErr) {
+            console.error("[Search] Failed to refund credit:", refundErr);
+        }
+    }
+
+    // --- Pioneer Bonus: +2 credits for first search in new area ---
+    let pioneerBonus = false;
+    if (isPioneer && geminiSuccess) {
+        try {
+            await db.runTransaction(async (transaction) => {
+                const userDoc = await transaction.get(userRef);
+                if (userDoc.exists) {
+                    const userData = userDoc.data()!;
+                    const credits: UserCredits = userData.credits || { remaining: 0, used: 0, limit: 5, resetDate: new Date().toISOString() };
+
+                    // Only give bonus to free users
+                    if (userData.tier !== "premium") {
+                        transaction.update(userRef, {
+                            "credits.remaining": credits.remaining + 2,
+                            "credits.limit": Math.max(credits.limit, credits.remaining + 2),
+                            updatedAt: new Date().toISOString()
+                        });
+                        pioneerBonus = true;
+                        console.log(`[Search] 🎉 Pioneer bonus: +2 credits for user ${userId}`);
+                    }
+                }
+            });
+        } catch (err) {
+            console.warn("[Search] Failed to grant pioneer bonus:", err);
+        }
+    }
+
+    // --- Fetch final credit state ---
+    const finalUserDoc = await userRef.get();
+    const finalData = finalUserDoc.data();
+    const finalCredits = finalData?.credits || { remaining: 0, used: 0, limit: 5 };
+    const finalTier = finalData?.tier || "free";
+
+    return {
+        results: scoredResults.slice(0, TOP_RESULTS),
+        credits: {
+            remaining: geminiSuccess ? (pioneerBonus ? finalCredits.remaining : reservation.remaining) : finalCredits.remaining,
+            limit: finalCredits.limit,
+            used: finalCredits.used,
+            tier: finalTier
+        },
+        geminiSuccess,
+        pioneerBonus
+    };
+}
+
+// =============================================================================
+// TIERED LOGIC HELPERS (The Fork)
+// =============================================================================
+
+/**
+ * Check if user has credits available (Premium or remaining > 0).
+ * This is called BEFORE expensive AI/Enrichment operations to prevent leaks.
+ */
+async function checkUserHasCredits(userId: string | null): Promise<{
+    hasCredits: boolean;
+    tier: 'free' | 'premium' | 'guest';
+    remaining: number;
+    limit: number;
+    used: number;
+}> {
+    if (!userId) {
+        return { hasCredits: false, tier: 'guest', remaining: 0, limit: 0, used: 0 };
+    }
+
+    try {
+        const db = getAdminDb();
+        const userDoc = await db.collection("users").doc(userId).get();
+
+        if (!userDoc.exists) {
+            // New user - they get free credits
+            return { hasCredits: true, tier: 'free', remaining: 5, limit: 5, used: 0 };
+        }
+
+        const userData = userDoc.data()!;
+        const tier: 'free' | 'premium' = userData.tier || 'free';
+        const credits = userData.credits || { remaining: 5, used: 0, limit: 5 };
+
+        // Premium users always have credits
+        if (tier === 'premium') {
+            return { hasCredits: true, tier: 'premium', remaining: -1, limit: -1, used: credits.used || 0 };
+        }
+
+        // Free users: check remaining
+        const hasCredits = credits.remaining > 0;
+        return {
+            hasCredits,
+            tier: 'free',
+            remaining: credits.remaining,
+            limit: credits.limit || 5,
+            used: credits.used || 0
+        };
+    } catch (error) {
+        console.error("[checkUserHasCredits] Error:", error);
+        // On error, deny access to be safe
+        return { hasCredits: false, tier: 'free', remaining: 0, limit: 5, used: 0 };
+    }
+}
+
+/**
+ * Map a LightCandidate to a Place-compatible structure for Basic results.
+ * These results lack photos and AI scores but are still usable.
+ */
+function mapLightCandidateToPlace(candidate: LightCandidate): {
+    place_id: string;
+    name: string;
+    types: string[];
+    rating?: number;
+    user_ratings_total?: number;
+    geometry: { location: { lat: number; lng: number } };
+    formatted_address: string;
+    vicinity: string;
+    imageSrc: string;
+    isGeneric: boolean;
+    dataLevel: 'light';
+    distance?: number;
+} {
+    return {
+        place_id: candidate.place_id,
+        name: candidate.name,
+        types: candidate.types,
+        rating: candidate.rating,
+        user_ratings_total: candidate.userRatingCount,
+        geometry: { location: candidate.location },
+        formatted_address: "",  // Not available in light data
+        vicinity: "",           // Not available in light data
+        imageSrc: "/placeholder-restaurant.jpg",  // Generic fallback
+        isGeneric: true,        // Flag for frontend to show upgrade CTA
+        dataLevel: 'light',
+        distance: candidate.distance
+    };
+}
+
+// =============================================================================
+// MAIN HANDLER
+// =============================================================================
+
+interface UserPreferences {
+    allergies: string[];
+    dietary: string[];
+    cuisines: string[];
+    budget: string;
+}
+
+export async function GET(request: NextRequest) {
+    try {
+        // --- 0. Environment Check ---
+        const GOOGLE_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY;
+        if (!GOOGLE_API_KEY) throw new Error("MISSING ENV VAR: NEXT_PUBLIC_GOOGLE_MAPS_KEY");
+
+        // --- 1. Parse Request Parameters ---
+        const { searchParams } = new URL(request.url);
+        const lat = parseFloat(searchParams.get("lat") || "0");
+        const lng = parseFloat(searchParams.get("lng") || "0");
+        let radius = parseFloat(searchParams.get("radius") || "5000");
+        const rawKeyword = searchParams.get("keyword") || "";
+
+        // --- 1b. Parse Natural Language Search Intent ---
+        const searchIntent = parseSearchIntent(rawKeyword);
+        const keyword = searchIntent.cleanKeyword; // Clean keyword for Google
+
+        // Apply detected radius from query (e.g., "pizza 3 miles from me")
+        if (searchIntent.detectedRadius !== null) {
+            radius = searchIntent.detectedRadius;
+            console.log(`[Search] Using radius from query: ${radius}m`);
+        }
+
+        // --- 2. Authentication & User Profile ---
+        let userId: string | null = null;
+        let userPreferences: UserPreferences = {
+            allergies: [],
+            dietary: [],
+            cuisines: [],
+            budget: "any"
+        };
+
+        const authHeader = request.headers.get("Authorization");
+        if (authHeader?.startsWith("Bearer ")) {
+            try {
+                const token = authHeader.split("Bearer ")[1];
+                const decodedToken = await getAdminAuth().verifyIdToken(token);
+                userId = decodedToken.uid;
+
+                // Fetch user preferences
+                const userDoc = await getAdminDb().collection("users").doc(userId).get();
+                if (userDoc.exists) {
+                    const userData = userDoc.data();
+                    const prefs = userData?.preferences || userData?.profile?.preferences;
+                    if (prefs) {
+                        userPreferences = {
+                            allergies: Array.isArray(prefs.allergies) ? prefs.allergies : (prefs.allergies ? [prefs.allergies] : []),
+                            dietary: Array.isArray(prefs.dietary) ? prefs.dietary : [],
+                            cuisines: Array.isArray(prefs.cuisines) ? prefs.cuisines : [],
+                            budget: prefs.budget || "any"
+                        };
+                    }
+
+                    // GPS PRIORITY FIX: Only use profile radius if NO radius detected from URL/NLP
+                    // URL params (lat, lng, radius) are FINAL and never overridden
+                    if (searchIntent.detectedRadius === null && radius === 5000) {
+                        const profileRadius = userData?.profile?.searchDefaults?.radius;
+                        if (typeof profileRadius === 'number' && profileRadius > 0) {
+                            radius = profileRadius;
+                            console.log(`[Search] Using user's profile radius: ${radius}m`);
+                        }
+                    }
+                }
+            } catch {
+                console.warn("[Search] Invalid auth token");
             }
         }
 
-        // --- 7. Respond with Reserved Status ---
-        const finalCredits = reservedStatus?.remaining ?? 0;
-        const finalMode = reservedStatus?.tier ?? 'free';
-        // Note: Credits were already decremented in step 4 via reserveUserCredit transaction.
+        // =========================================================================
+        // THREE-STAGE AI FUNNEL
+        // =========================================================================
 
-        const responseData = {
-            results: finalResults,
-            mode: finalMode,
-            creditsRemaining: finalCredits,
-            refreshNeeded: true // Signal UI to update
-        };
+        // --- STAGE 1: Light Discovery (20 candidates, cheap fields) ---
+        console.log(`[Stage1] Light discovery for: "${keyword}" at (${lat}, ${lng}) radius ${radius}m`);
+        const { candidates: lightCandidates, isPioneer, source } = await findLightCandidates(lat, lng, radius, keyword);
 
-        // --- 8. Save Cache (Async) ---
-        if (userId) {
-            await setCache(cacheCollection, cacheKey, responseData, 24 * 60 * 60 * 1000, userId);
+        if (lightCandidates.length === 0) {
+            return NextResponse.json({
+                results: [],
+                credits: { remaining: 0, limit: 5, used: 0, tier: "free" },
+                source: "empty",
+                message: `No restaurants found within ${radius}m. This is a strict radius - we don't auto-expand.`
+            });
         }
 
-        return NextResponse.json(responseData);
+        console.log(`[Stage1] Found ${lightCandidates.length} light candidates`);
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } catch (error: any) {
-        console.error("🔥 CRITICAL SEARCH ERROR:", error);
+        // =========================================================================
+        // THE FORK: Premium vs. Basic Decision Gate
+        // CRITICAL: This check MUST happen BEFORE any expensive operations (Scout, Enrich)
+        // =========================================================================
+        const creditCheck = await checkUserHasCredits(userId);
+        console.log(`[Search] User ${userId || 'guest'} mode: ${creditCheck.hasCredits ? 'PREMIUM' : 'BASIC'} (tier: ${creditCheck.tier}, remaining: ${creditCheck.remaining})`);
+
+        if (!creditCheck.hasCredits) {
+            // =====================================================================
+            // BASIC BRANCH: Return Light Data Only (0 credits deducted)
+            // NO Scout, NO Enrichment, NO Gemini costs
+            // =====================================================================
+            console.log(`[BasicBranch] Returning ${lightCandidates.length} light results (no AI, no photos)`);
+
+            // Sort by rating (desc) then distance (asc) for best UX without AI
+            const sortedCandidates = [...lightCandidates].sort((a, b) => {
+                const ratingDiff = (b.rating || 0) - (a.rating || 0);
+                if (ratingDiff !== 0) return ratingDiff;
+                return (a.distance || 0) - (b.distance || 0);
+            });
+
+            // Map to Place-compatible format and take top 20
+            const basicResults = sortedCandidates
+                .slice(0, 20)
+                .map(mapLightCandidateToPlace);
+
+            return NextResponse.json({
+                results: basicResults,
+                credits: {
+                    remaining: creditCheck.remaining,
+                    limit: creditCheck.limit,
+                    used: creditCheck.used,
+                    tier: creditCheck.tier
+                },
+                source,
+                dataLevel: 'light',
+                message: creditCheck.tier === 'guest'
+                    ? "Sign in to unlock AI-powered personalized recommendations!"
+                    : "Monthly limit reached. Showing basic results without AI scoring."
+            });
+        }
+
+        // =========================================================================
+        // PREMIUM BRANCH: Full AI Pipeline (continues below)
+        // User has credits - proceed with Scout, Enrich, and Gemini scoring
+        // =========================================================================
+        console.log(`[PremiumBranch] Proceeding with AI pipeline...`);
+
+        // --- STAGE 2: AI Scout (Select top 6 with dietary awareness) ---
+        const scoutProfile = {
+            ...userPreferences,
+            hasSuperlative: searchIntent.hasSuperlative
+        };
+
+        const scoutResult = await scoutTopCandidates(lightCandidates, keyword, scoutProfile);
+        console.log(`[Stage2] Scout: ${scoutResult.perfectMatches.length} perfect, survival=${scoutResult.isSurvivalMode}`);
+
+        // Configurable Peek Ahead distance (default +2km)
+        const PEEK_AHEAD_DISTANCE = 2000; // meters
+
+        // =======================================================================
+        // DECISION REQUIRED MODE (No Perfect Matches - User Chooses Next Step)
+        // =======================================================================
+        if (scoutResult.isSurvivalMode && scoutResult.survivalOption) {
+            console.log(`[DecisionMode] No perfect matches. Returning decision point with survival: ${scoutResult.survivalOption.id}`);
+
+            // Find the light candidate data for the survival option (NO enrichment!)
+            const survivalLight = lightCandidates.find(c => c.place_id === scoutResult.survivalOption!.id);
+
+            // Fetch user credits without deducting (just for display)
+            let userCredits = { remaining: 0, limit: 0, used: 0, tier: "guest" };
+            if (userId) {
+                try {
+                    const userDoc = await getAdminDb().collection("users").doc(userId).get();
+                    if (userDoc.exists) {
+                        const userData = userDoc.data();
+                        userCredits = {
+                            remaining: userData?.credits?.remaining ?? 0,
+                            limit: userData?.credits?.limit ?? 5,
+                            used: userData?.credits?.used ?? 0,
+                            tier: userData?.subscription?.tier ?? "free"
+                        };
+                    }
+                } catch (e) {
+                    console.warn("[DecisionMode] Failed to fetch user credits:", e);
+                }
+            }
+
+            // Build DECISION_REQUIRED response (NO API costs yet!)
+            const decisionResponse: DecisionRequiredResponse = {
+                status: "DECISION_REQUIRED",
+                message: `No exact match found within ${radius}m.`,
+                choices: {
+                    survivalOption: survivalLight ? {
+                        id: survivalLight.place_id,
+                        name: survivalLight.name,
+                        rating: survivalLight.rating,
+                        distance: survivalLight.distance,
+                        reason: scoutResult.survivalOption.reason
+                    } : null,
+                    expandOption: {
+                        label: `Search for exact match (+${PEEK_AHEAD_DISTANCE / 1000}km)`,
+                        newRadius: radius + PEEK_AHEAD_DISTANCE
+                    }
+                },
+                credits: userCredits,
+                source
+            };
+
+            console.log(`[DecisionMode] Returning decision point. No credits deducted.`);
+            return NextResponse.json(decisionResponse);
+        }
+
+        // =======================================================================
+        // NORMAL MODE (Perfect Matches Found)
+        // =======================================================================
+        let winnerIds = scoutResult.perfectMatches;
+
+        if (winnerIds.length === 0) {
+            // Fallback: use all light candidates if scout returns nothing
+            console.warn("[Stage2] Scout returned empty, using all light candidates");
+            winnerIds = lightCandidates.map(c => c.place_id).slice(0, SCOUT_TOP_N);
+        }
+
+        // --- 5. Enrich Winners (Stage 3) ---
+        // This stage now handles the "Partial Cache" upgrade logic internally via getEnrichedRestaurants
+        const enrichedRestaurants = await getEnrichedRestaurants(winnerIds);
+
+        // Map to EnrichedPlace for transaction handler
+        const enrichedCandidates = mapToEnrichedPlaces(enrichedRestaurants);
+        console.log(`[Search] Enriched ${enrichedCandidates.length} winners`);
+
+        // --- 6. Execute Transaction (Cost & Scoring) ---
+        if (userId) {
+            try {
+                const transaction = await executeSearchTransaction(
+                    userId,
+                    enrichedCandidates,
+                    userPreferences,
+                    keyword,
+                    isPioneer,
+                    searchIntent.rawQuery,      // Raw query for Gemini context
+                    searchIntent.hasSuperlative // Quality preference flag
+                );
+
+                // Build response
+                const response: SearchResponse = {
+                    results: transaction.results,
+                    credits: transaction.credits,
+                    source,
+                    pioneerBonus: transaction.pioneerBonus
+                };
+
+                if (!transaction.geminiSuccess) {
+                    response.geminiError = "Oops! Gemini stabbed us in the back. Here's your credit back! 🔄";
+                }
+
+                if (isPioneer && transaction.pioneerBonus) {
+                    response.pioneerMessage = "🎉 Congratulations! You're the first to explore this area with NearSpotty! +2 bonus credits!";
+                }
+
+                return NextResponse.json(response);
+
+            } catch (err: unknown) {
+                // Handle 402 specifically
+                if (typeof err === "object" && err !== null && "status" in err && (err as { status: number }).status === 402) {
+                    return NextResponse.json({
+                        error: (err as { message?: string }).message || "Monthly limit reached",
+                        code: "LIMIT_REACHED",
+                        mode: "free",
+                        tier: "free"
+                    }, { status: 402 });
+                }
+                throw err;
+            }
+        }
+
+        // --- 6. Unauthenticated: Return basic results without AI ---
         return NextResponse.json({
-            error: error.message || "Internal Server Error",
+            results: enrichedCandidates.slice(0, TOP_RESULTS),
+            credits: { remaining: 0, limit: 0, used: 0, tier: "guest" },
+            source,
+            message: "Sign in to unlock AI-powered personalized recommendations!"
+        });
+
+    } catch (error: unknown) {
+        console.error("🔥 CRITICAL SEARCH ERROR:", error);
+        const errorMessage = error instanceof Error ? error.message : "Internal Server Error";
+        return NextResponse.json({
+            error: errorMessage,
             code: "CRITICAL_FAILURE",
-            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+            stack: process.env.NODE_ENV === "development" && error instanceof Error ? error.stack : undefined
         }, { status: 500 });
     }
 }
 
-function mapPriceLevel(level: string): number | null {
-    switch (level) {
-        case "PRICE_LEVEL_FREE": return 0;
-        case "PRICE_LEVEL_INEXPENSIVE": return 1;
-        case "PRICE_LEVEL_MODERATE": return 2;
-        case "PRICE_LEVEL_EXPENSIVE": return 3;
-        case "PRICE_LEVEL_VERY_EXPENSIVE": return 4;
-        default: return null;
-    }
+// =============================================================================
+// HELPER FUNCTIONS
+// =============================================================================
+
+interface SearchResponse {
+    status?: "PERFECT_MATCH" | "PARTIAL_MATCH";
+    results: EnrichedPlace[];
+    credits: {
+        remaining: number;
+        limit: number;
+        used: number;
+        tier: string;
+    };
+    source: string;
+    pioneerBonus?: boolean;
+    pioneerMessage?: string;
+    geminiError?: string;
+    message?: string;
+    smartSuggestion?: SmartSuggestion;
 }
+
+interface SmartSuggestion {
+    found: boolean;
+    placeName: string;
+    placeId: string;
+    distance: number;
+    actionPayload: { radius: number };
+}
+
+/**
+ * Response when no perfect dietary matches found.
+ * User must choose: use survival option OR expand search radius.
+ * NO credits deducted until user makes a choice.
+ */
+interface DecisionRequiredResponse {
+    status: "DECISION_REQUIRED";
+    message: string;
+    choices: {
+        survivalOption: {
+            id: string;
+            name: string;
+            rating?: number;
+            distance?: number;
+            reason: string;
+        } | null;
+        expandOption: {
+            label: string;
+            newRadius: number;
+        };
+    };
+    credits: {
+        remaining: number;
+        limit: number;
+        used: number;
+        tier: string;
+    };
+    source: string;
+}
+
+/**
+ * Calculate appropriate geohash precision based on search radius.
+ */
+function calculateGeohashPrecision(radius: number): number {
+    if (radius <= 500) return 7;      // ~76m precision
+    if (radius <= 2000) return 6;     // ~610m precision
+    if (radius <= 10000) return 5;    // ~2.4km precision
+    return 4;                          // ~20km precision
+}
+
+/**
+ * Haversine formula to calculate distance between two coordinates.
+ */
+function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+    const R = 6371000; // Earth's radius in meters
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a = Math.sin(dLat / 2) ** 2 +
+        Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+        Math.sin(dLon / 2) ** 2;
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+}
+
+function toRad(deg: number): number {
+    return deg * (Math.PI / 180);
+}
+
+// End of file cleanup
+

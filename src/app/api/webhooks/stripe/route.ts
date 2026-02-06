@@ -103,23 +103,35 @@ export async function POST(request: Request) {
                 console.log(`[Stripe Webhook] 🔄 Attempting Firestore Update for User ${userId}...`);
                 console.log(`[Stripe Webhook] Data Payload (Plan: ${plan}, Tier: premium, Status: ${status})`);
 
-                // Standardized User Object Update
-                // Update user with subscription details AND explicit tier upgrade
+                // CRITICAL FIX: Atomic Premium Activation
+                // Single atomic write ensures immediate tier activation + unlimited credits
                 await getAdminDb().collection("users").doc(userId).set({
+                    // ✅ Immediate tier activation (single source of truth)
+                    tier: 'premium',
+
+                    // ✅ Subscription details
                     subscription: {
                         status: status,
                         tier: 'premium',
                         plan: plan,
-                        id: subscriptionId,
-                        current_period_end: currentPeriodEnd.toISOString(),
-                        cancel_at_period_end: cancelAtPeriodEnd,
-                        cancel_at: cancelAt,
+                        stripeSubscriptionId: subscriptionId,
+                        stripeCustomerId: session.customer as string,
+                        currentPeriodEnd: currentPeriodEnd.toISOString(),
+                        cancelAtPeriodEnd: cancelAtPeriodEnd,
+                        cancelAt: cancelAt,
                         updatedAt: new Date().toISOString()
                     },
-                    // Flattened critical fields
-                    tier: 'premium',
-                    stripeCustomerId: session.customer,
-                    updatedAt: new Date().toISOString(),
+
+                    // ✅ Initialize unlimited credits
+                    credits: {
+                        remaining: -1,  // -1 = unlimited for premium
+                        used: 0,
+                        resetDate: new Date().toISOString(),
+                        limit: -1
+                    },
+
+                    // ✅ Metadata
+                    updatedAt: new Date().toISOString()
                 }, { merge: true });
 
                 console.log(`✅ [Stripe Webhook] SUCCESS: User ${userId} updated in Firestore.`);
@@ -168,17 +180,24 @@ export async function POST(request: Request) {
                 const effectiveTier = (isActive) ? 'premium' : 'free';
 
                 await userDoc.ref.set({
+                    tier: effectiveTier,
                     subscription: {
                         status: status,
                         tier: effectiveTier,
-                        id: subscription.id,
-                        current_period_end: currentPeriodEnd,
-                        cancel_at_period_end: cancelAtPeriodEnd,
-                        cancel_at: cancelAt,
+                        plan: effectiveTier,
+                        stripeSubscriptionId: subscription.id,
+                        currentPeriodEnd: currentPeriodEnd,
+                        cancelAtPeriodEnd: cancelAtPeriodEnd,
+                        cancelAt: cancelAt,
                         updatedAt: new Date().toISOString()
                     },
-                    tier: effectiveTier,
-                    updatedAt: new Date().toISOString(),
+                    credits: {
+                        remaining: effectiveTier === 'premium' ? -1 : 5,
+                        used: 0,
+                        resetDate: new Date().toISOString(),
+                        limit: effectiveTier === 'premium' ? -1 : 5
+                    },
+                    updatedAt: new Date().toISOString()
                 }, { merge: true });
 
                 console.log(`[Stripe Webhook] User ${userDoc.id} subscription updated: ${status}, tier: ${effectiveTier}`);
@@ -205,16 +224,22 @@ export async function POST(request: Request) {
                 const userDoc = usersSnapshot.docs[0];
 
                 await userDoc.ref.set({
+                    tier: "free",
                     subscription: {
                         status: "canceled",
                         tier: "free",
-                        current_period_end: new Date().toISOString(), // Expired
-                        cancel_at_period_end: false,
+                        plan: "free",
+                        currentPeriodEnd: new Date().toISOString(),
+                        cancelAtPeriodEnd: false,
                         updatedAt: new Date().toISOString()
                     },
-                    tier: "free",
-                    plan: "free",
-                    updatedAt: new Date().toISOString(),
+                    credits: {
+                        remaining: 5,
+                        used: 0,
+                        resetDate: new Date().toISOString(),
+                        limit: 5
+                    },
+                    updatedAt: new Date().toISOString()
                 }, { merge: true });
 
                 console.log(`[Stripe Webhook] User ${userDoc.id} downgraded to free (deleted)`);

@@ -1,165 +1,271 @@
 import { getAdminDb } from "@/lib/firebase-admin";
-import { FieldValue } from "firebase-admin/firestore";
 import { DINER_LIMITS } from "@/lib/plan-limits";
+import type { UserCredits } from "@/types";
 
-const APP_ID = process.env.NEXT_PUBLIC_FIREBASE_APP_ID || "nearspotty_default";
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
-function getUsageRef(userId: string) {
-    // /artifacts/${appId}/users/${userId}/usage/stats
-    return getAdminDb().collection('artifacts').doc(APP_ID)
-        .collection('users').doc(userId)
-        .collection('usage').doc('stats');
-}
-
 export interface UserLimitStatus {
-    count: number;
+    tier: 'free' | 'premium';
     canSearch: boolean;
     remaining: number;
-    lastResetDate: string;
-    tier: 'free' | 'premium';
-    limitReached: boolean;
+    used: number;
     limit: number;
+    resetDate: string;
+    limitReached: boolean;
 }
 
 /**
- * Check user's Search usage and subscription status.
- * Automatically resets count if >30 days from last reset.
+ * Check user's credit status and subscription tier.
+ * Automatically resets credits if >30 days from last reset.
  */
 export async function checkUserLimit(userId: string): Promise<UserLimitStatus> {
     const userRef = getAdminDb().collection('users').doc(userId);
-    const usageRef = getUsageRef(userId);
+    const userDoc = await userRef.get();
 
-    const [userDoc, usageDoc] = await Promise.all([
-        userRef.get(),
-        usageRef.get()
-    ]);
+    if (!userDoc.exists) {
+        // Auto-initialize free user
+        const defaultCredits: UserCredits = {
+            remaining: DINER_LIMITS.free.aiChecksPerMonth,
+            used: 0,
+            resetDate: new Date().toISOString(),
+            limit: DINER_LIMITS.free.aiChecksPerMonth
+        };
 
-    // Default usage data
-    const usageData = usageDoc.exists ? usageDoc.data()! : { count: 0, lastResetDate: new Date().toISOString() };
-    const usageCount = usageData.count || 0;
-    const lastResetDate = usageData.lastResetDate || new Date().toISOString();
-
-    // Determine Tier
-    let tier: 'free' | 'premium' = 'free';
-    if (userDoc.exists) {
-        const userData = userDoc.data()!;
-        tier = userData.tier || userData.subscriptionTier || (userData.plan === 'premium' ? 'premium' : 'free');
-    }
-
-    // Check Reset Logic
-    const now = Date.now();
-    const lastResetTime = new Date(lastResetDate).getTime();
-    if (now - lastResetTime >= THIRTY_DAYS_MS) {
-        const newResetDate = new Date().toISOString();
-        // Fire and forget reset update
-        usageRef.set({
-            count: 0,
-            lastResetDate: newResetDate
-        }, { merge: true }).catch(console.error);
+        await userRef.set({
+            tier: 'free',
+            credits: defaultCredits,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+        }, { merge: true });
 
         return {
-            count: 0,
+            tier: 'free',
             canSearch: true,
-            remaining: tier === 'premium' ? Infinity : DINER_LIMITS.free.aiChecksPerMonth,
-            lastResetDate: newResetDate,
-            tier,
-            limitReached: false,
+            remaining: defaultCredits.remaining,
+            used: 0,
+            limit: defaultCredits.limit,
+            resetDate: defaultCredits.resetDate,
+            limitReached: false
+        };
+    }
+
+    const userData = userDoc.data()!;
+    const tier: 'free' | 'premium' = userData.tier || 'free';
+    const credits = userData.credits || {
+        remaining: tier === 'premium' ? -1 : DINER_LIMITS.free.aiChecksPerMonth,
+        used: 0,
+        resetDate: new Date().toISOString(),
+        limit: tier === 'premium' ? -1 : DINER_LIMITS.free.aiChecksPerMonth
+    };
+
+    // NaN Guard: Ensure limit is always a valid number
+    if (typeof credits.limit !== 'number' || isNaN(credits.limit)) {
+        credits.limit = tier === 'premium' ? -1 : 5;
+    }
+
+    // Check if reset needed (30-day cycle)
+    const now = Date.now();
+    const resetTime = new Date(credits.resetDate).getTime();
+
+    if (now - resetTime >= THIRTY_DAYS_MS) {
+        // Reset credits for new period
+        const newCredits: UserCredits = {
+            remaining: tier === 'premium' ? -1 : DINER_LIMITS.free.aiChecksPerMonth,
+            used: 0,
+            resetDate: new Date().toISOString(),
             limit: tier === 'premium' ? -1 : DINER_LIMITS.free.aiChecksPerMonth
         };
-    }
 
-    // Premium Check
-    if (tier === 'premium') {
+        // Fire and forget update
+        userRef.update({ credits: newCredits, updatedAt: new Date().toISOString() })
+            .catch(err => console.error('Failed to reset credits:', err));
+
         return {
-            count: usageCount,
-            canSearch: true,
-            remaining: Infinity,
-            lastResetDate,
             tier,
-            limitReached: false,
-            limit: -1
+            canSearch: true,
+            remaining: newCredits.remaining,
+            used: 0,
+            limit: newCredits.limit,
+            resetDate: newCredits.resetDate,
+            limitReached: false
         };
     }
 
-    // Free Check
-    const limit = DINER_LIMITS.free.aiChecksPerMonth;
-    const remaining = Math.max(0, limit - usageCount);
-    const canSearch = usageCount < limit;
+    // Premium: unlimited credits
+    if (tier === 'premium') {
+        return {
+            tier: 'premium',
+            canSearch: true,
+            remaining: -1,
+            used: credits.used || 0,
+            limit: -1,
+            resetDate: credits.resetDate,
+            limitReached: false
+        };
+    }
+
+    // Free: check limit
+    const canSearch = credits.remaining > 0;
 
     return {
-        count: usageCount,
+        tier: 'free',
         canSearch,
-        remaining,
-        lastResetDate,
-        tier,
-        limitReached: !canSearch,
-        limit
+        remaining: credits.remaining,
+        used: credits.used || 0,
+        limit: credits.limit,
+        resetDate: credits.resetDate,
+        limitReached: !canSearch
     };
 }
 
 /**
- * Increment usage count for a user.
- * Should be called AFTER a successful API call.
+ * Transactionally reserve a credit - atomically checks and decrements.
+ * Returns authorization status and remaining credits.
  */
-export async function incrementUserUsage(userId: string): Promise<void> {
-    const usageRef = getUsageRef(userId);
-    await usageRef.set({
-        count: FieldValue.increment(1),
-        lastResetDate: FieldValue.serverTimestamp() // Keep date or update? Logic in check says keep unless 30 days. 
-        // Actually, better to NOT update lastResetDate here, otherwise we postpone reset forever.
-        // But we need to ensure the doc exists.
-    }, { merge: true });
-}
-
-/**
- * Transactionally reserve a credit.
- * Used when we need to be strictly atomic (e.g. concurrent requests).
- */
-export async function reserveUserCredit(userId: string): Promise<{ authorized: boolean; tier: 'free' | 'premium'; remaining: number }> {
-    const usageRef = getUsageRef(userId);
+export async function reserveUserCredit(userId: string): Promise<{
+    authorized: boolean;
+    tier: 'free' | 'premium';
+    remaining: number;
+}> {
     const userRef = getAdminDb().collection('users').doc(userId);
 
     try {
-        return await getAdminDb().runTransaction(async (t) => {
-            const userDoc = await t.get(userRef);
-            const usageDoc = await t.get(usageRef);
+        return await getAdminDb().runTransaction(async (transaction) => {
+            const userDoc = await transaction.get(userRef);
 
-            let tier: 'free' | 'premium' = 'free';
-            if (userDoc.exists) {
-                const d = userDoc.data()!;
-                tier = d.tier || d.subscriptionTier || (d.plan === 'premium' ? 'premium' : 'free');
+            // Auto-initialize if user doesn't exist
+            if (!userDoc.exists) {
+                const defaultCredits: UserCredits = {
+                    remaining: DINER_LIMITS.free.aiChecksPerMonth - 1, // Reserve 1 immediately
+                    used: 1,
+                    resetDate: new Date().toISOString(),
+                    limit: DINER_LIMITS.free.aiChecksPerMonth
+                };
+
+                transaction.set(userRef, {
+                    tier: 'free',
+                    credits: defaultCredits,
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString()
+                });
+
+                return {
+                    authorized: true,
+                    tier: 'free',
+                    remaining: defaultCredits.remaining
+                };
             }
 
-            const usageData = usageDoc.exists ? usageDoc.data()! : { count: 0, lastResetDate: new Date().toISOString() };
-            let count = usageData.count || 0;
-            const lastResetDate = usageData.lastResetDate || new Date().toISOString();
+            const userData = userDoc.data()!;
+            const tier: 'free' | 'premium' = userData.tier || 'free';
+            let credits: UserCredits = userData.credits || {
+                remaining: tier === 'premium' ? -1 : DINER_LIMITS.free.aiChecksPerMonth,
+                used: 0,
+                resetDate: new Date().toISOString(),
+                limit: tier === 'premium' ? -1 : DINER_LIMITS.free.aiChecksPerMonth
+            };
 
-            // Reset Check
+            // Check if reset needed
             const now = Date.now();
-            if (now - new Date(lastResetDate).getTime() >= THIRTY_DAYS_MS) {
-                count = 0;
-                t.set(usageRef, { count: 0, lastResetDate: new Date().toISOString() }, { merge: true });
+            const resetTime = new Date(credits.resetDate).getTime();
+
+            if (now - resetTime >= THIRTY_DAYS_MS) {
+                // Reset for new period
+                credits = {
+                    remaining: tier === 'premium' ? -1 : DINER_LIMITS.free.aiChecksPerMonth,
+                    used: 0,
+                    resetDate: new Date().toISOString(),
+                    limit: tier === 'premium' ? -1 : DINER_LIMITS.free.aiChecksPerMonth
+                };
             }
 
+            // Premium: always authorized
             if (tier === 'premium') {
-                t.set(usageRef, { count: count + 1 }, { merge: true });
-                return { authorized: true, tier, remaining: Infinity };
+                transaction.update(userRef, {
+                    'credits.used': (credits.used || 0) + 1,
+                    updatedAt: new Date().toISOString()
+                });
+
+                return { authorized: true, tier: 'premium', remaining: -1 };
             }
 
-            const limit = DINER_LIMITS.free.aiChecksPerMonth;
-            if (count < limit) {
-                t.set(usageRef, {
-                    count: count + 1,
-                    // Do NOT update lastResetDate on increment
-                }, { merge: true });
-                return { authorized: true, tier, remaining: limit - (count + 1) };
+            // Free: check if credits available
+            if (credits.remaining > 0) {
+                transaction.update(userRef, {
+                    'credits.remaining': credits.remaining - 1,
+                    'credits.used': (credits.used || 0) + 1,
+                    updatedAt: new Date().toISOString()
+                });
+
+                return {
+                    authorized: true,
+                    tier: 'free',
+                    remaining: credits.remaining - 1
+                };
             }
 
-            return { authorized: false, tier, remaining: 0 };
+            // Out of credits
+            return { authorized: false, tier: 'free', remaining: 0 };
         });
-    } catch (e) {
-        console.error("User Credit Reservation Failed:", e);
+    } catch (error) {
+        console.error('Transaction failed:', error);
         return { authorized: false, tier: 'free', remaining: 0 };
     }
 }
+
+/**
+ * Refund a credit to user (used when Gemini AI fails).
+ * Only refunds for free tier users.
+ */
+export async function refundUserCredit(userId: string): Promise<{
+    refunded: boolean;
+    remaining: number;
+}> {
+    const userRef = getAdminDb().collection('users').doc(userId);
+
+    try {
+        return await getAdminDb().runTransaction(async (transaction) => {
+            const userDoc = await transaction.get(userRef);
+
+            if (!userDoc.exists) {
+                return { refunded: false, remaining: 0 };
+            }
+
+            const userData = userDoc.data()!;
+            const tier: 'free' | 'premium' = userData.tier || 'free';
+
+            // Premium users don't need refunds
+            if (tier === 'premium') {
+                return { refunded: false, remaining: -1 };
+            }
+
+            const credits = userData.credits || {
+                remaining: DINER_LIMITS.free.aiChecksPerMonth,
+                used: 0,
+                resetDate: new Date().toISOString(),
+                limit: DINER_LIMITS.free.aiChecksPerMonth
+            };
+
+            // Refund 1 credit
+            const newRemaining = credits.remaining + 1;
+            const newUsed = Math.max(0, (credits.used || 0) - 1);
+
+            transaction.update(userRef, {
+                'credits.remaining': newRemaining,
+                'credits.used': newUsed,
+                updatedAt: new Date().toISOString()
+            });
+
+            console.log(`[UserLimits] Refunded credit for ${userId}. New remaining: ${newRemaining}`);
+
+            return {
+                refunded: true,
+                remaining: newRemaining
+            };
+        });
+    } catch (error) {
+        console.error('Refund transaction failed:', error);
+        return { refunded: false, remaining: 0 };
+    }
+}
+

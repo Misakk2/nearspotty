@@ -4,6 +4,7 @@
  * CRITICAL: All exports are functions that initialize on first call.
  * This prevents Next.js server crashes when secrets are temporarily unavailable.
  */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { initializeApp, getApps, getApp, App, applicationDefault } from "firebase-admin/app";
 import { getFirestore, Firestore } from "firebase-admin/firestore";
 import { getAuth, Auth } from "firebase-admin/auth";
