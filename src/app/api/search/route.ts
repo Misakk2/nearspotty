@@ -203,9 +203,18 @@ async function findLightCandidates(
         const gridPromises = gridKeys.map(key => getCache<PlacesCacheEntry>("places_grid_cache", key));
         const gridResults = await Promise.all(gridPromises);
 
+        // Track which grid keys are covered by cache
+        const coveredKeys = new Set<string>();
         let gridHitCount = 0;
-        for (const entry of gridResults) {
+
+        for (let i = 0; i < gridResults.length; i++) {
+            const entry = gridResults[i];
+            const key = gridKeys[i];
+
             if (!entry) continue;
+
+            // Mark this grid key as covered
+            coveredKeys.add(key);
 
             for (const place of entry.places) {
                 if (existingIds.has(place.place_id)) continue;
@@ -241,13 +250,19 @@ async function findLightCandidates(
             }
         }
 
-        if (gridHitCount > 0) {
-            console.log(`[Light] Unified Grid Cache returned ${gridHitCount} candidates.`);
+        const allKeysCovered = coveredKeys.size === gridKeys.length;
+
+        if (gridHitCount > 0 || allKeysCovered) {
+            console.log(`[Light] Cache Status: ${gridHitCount} places found. Coverage: ${coveredKeys.size}/${gridKeys.length} grids.`);
+
             // Sort by distance
             candidates.sort((a, b) => (a.distance || 0) - (b.distance || 0));
 
-            // If we have enough results, return early!
-            if (candidates.length >= BATCH_SIZE) {
+            // NEW: ELITE CACHE LOGIC
+            // If all grid keys are covered, we have already fully searched this area.
+            // Even if we have 0 candidates, don't call Google again.
+            if (allKeysCovered || candidates.length >= BATCH_SIZE) {
+                console.log(`[Light] ${allKeysCovered ? 'Full area coverage' : 'Sufficient results'} in cache. Returning ${candidates.length} candidates.`);
                 return { candidates: candidates.slice(0, BATCH_SIZE), isPioneer: false, source: "firestore" };
             }
         }

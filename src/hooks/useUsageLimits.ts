@@ -63,46 +63,51 @@ export function useUsageLimits(): UsageLimitsResult {
         }
 
         try {
-            // Get user document for plan info (Keep this for Role/Plan)
-            const userDoc = await getDoc(doc(db, "users", user.uid));
+            // Parallelize fetches
+            const userDocPromise = getDoc(doc(db, "users", user.uid));
+            const usageDocPromise = getDoc(doc(db, "users", user.uid, "usage", currentMonthKey));
+
+            // Get token and fetch API
+            const apiPromise = user.getIdToken().then(token =>
+                fetch("/api/user/status", {
+                    headers: { Authorization: `Bearer ${token}` }
+                })
+            );
+
+            const [userDoc, usageDoc, apiRes] = await Promise.all([
+                userDocPromise,
+                usageDocPromise,
+                apiPromise
+            ]);
+
+            // Process User Role/Plan
             if (userDoc.exists()) {
                 const userData = userDoc.data();
                 setPlan((userData.plan as DinerPlan | BusinessPlan) || "free");
                 setRole(userData.role === "owner" ? "owner" : "diner");
             }
 
-            // [MODIFIED] Fetch AI Usage from Authoritative API
-            const token = await user.getIdToken();
-            const res = await fetch("/api/user/status", {
-                headers: { Authorization: `Bearer ${token}` }
-            });
-
-            if (res.ok) {
-                const data = await res.json();
-                setUsage(prev => ({
-                    ...prev,
-                    aiChecks: data.usage, // Mapped from 'usage'
-                    reservations: prev?.reservations || 0, // preserve legacy
-                    monthKey: currentMonthKey
-                }));
+            // Process API Result (AI Usage)
+            let aiChecks = 0;
+            if (apiRes.ok) {
+                const data = await apiRes.json();
+                aiChecks = data.usage || 0;
             } else {
-                console.error("Failed to fetch user status", res.status);
+                console.error("Failed to fetch user status", apiRes.status);
             }
 
-            // Legacy Reservation Fetching (Keep for Owners)
-            // TODO: Move this to API too eventually
-            const usageRef = doc(db, "users", user.uid, "usage", currentMonthKey);
-            const usageDoc = await getDoc(usageRef);
+            // Process Firestore Usage (Reservations)
+            let reservations = 0;
             if (usageDoc.exists()) {
                 const data = usageDoc.data();
-                setUsage(prev => ({
-                    ...prev,
-                    reservations: data.reservations || 0,
-                    // aiChecks: overwritten by API above
-                    monthKey: currentMonthKey
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                } as any));
+                reservations = data.reservations || 0;
             }
+
+            setUsage({
+                aiChecks,
+                reservations,
+                monthKey: currentMonthKey
+            });
 
         } catch (err) {
             console.error("Error fetching usage:", err);

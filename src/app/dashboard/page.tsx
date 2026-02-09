@@ -8,8 +8,6 @@ import ProtectedRoute from "@/components/protected-route";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Label } from "@/components/ui/label";
-import { Input } from "@/components/ui/input";
 import {
     Users,
     Calendar,
@@ -23,14 +21,16 @@ import {
     Check,
     X
 } from "lucide-react";
-import { doc, getDoc, updateDoc, collection, query, getDocs, orderBy, Timestamp, where } from "firebase/firestore";
+import { doc, getDoc, collection, query, getDocs, orderBy, Timestamp, where } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { motion } from "framer-motion";
 import toast from "react-hot-toast";
 import { BusinessPlan, BUSINESS_LIMITS, PLAN_TO_PRICE } from "@/lib/plan-limits";
 import PricingSettings from "@/components/dashboard/PricingSettings";
 import { MenuEditor } from "@/components/dashboard/MenuEditor";
+import { RestaurantEditor } from "@/components/dashboard/RestaurantEditor";
 import { TableManager } from "@/components/dashboard/TableManager";
+import { OpeningHoursEditor } from "@/components/dashboard/OpeningHoursEditor";
 
 interface Reservation {
     id: string;
@@ -54,7 +54,7 @@ export default function BusinessDashboard() {
         pending: 0,
         confirmed: 0
     });
-    const [activeTab, setActiveTab] = useState<'overview' | 'menu' | 'tables' | 'pricing' | 'subscription' | 'settings'>('overview');
+    const [activeTab, setActiveTab] = useState<'overview' | 'menu' | 'tables' | 'hours' | 'pricing' | 'subscription' | 'settings'>('overview');
     const [restaurantData, setRestaurantData] = useState({
         placeId: "",
         name: "",
@@ -236,22 +236,7 @@ export default function BusinessDashboard() {
         }
     };
 
-    const handleUpdateSettings = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!user) return;
-        try {
-            await updateDoc(doc(db, "users", user.uid), {
-                business: {
-                    ...restaurantData,
-                    updatedAt: new Date().toISOString()
-                }
-            });
-            toast.success("Settings updated!");
-        } catch (error) {
-            console.error("Update settings error:", error);
-            toast.error("Failed to update settings");
-        }
-    };
+
 
     if (loading) {
         return (
@@ -286,13 +271,14 @@ export default function BusinessDashboard() {
                                 { id: 'overview', label: 'Overview', icon: Users },
                                 { id: 'menu', label: 'Menu', icon: Sparkles },
                                 { id: 'tables', label: 'Tables', icon: Users },
+                                { id: 'hours', label: 'Hours', icon: Clock },
                                 { id: 'pricing', label: 'AI Pricing', icon: Sparkles },
                                 { id: 'subscription', label: 'Subscription', icon: CreditCard },
                                 { id: 'settings', label: 'Settings', icon: Calendar }
                             ].map(tab => (
                                 <button
                                     key={tab.id}
-                                    onClick={() => setActiveTab(tab.id as 'overview' | 'menu' | 'tables' | 'pricing' | 'subscription' | 'settings')}
+                                    onClick={() => setActiveTab(tab.id as 'overview' | 'menu' | 'tables' | 'hours' | 'pricing' | 'subscription' | 'settings')}
                                     className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-bold text-sm transition-all whitespace-nowrap ${activeTab === tab.id ? 'bg-white text-primary shadow-sm' : 'text-gray-500 hover:text-gray-900'}`}
                                 >
                                     <tab.icon className="h-4 w-4" />
@@ -325,6 +311,12 @@ export default function BusinessDashboard() {
                                 <Loader2 className="h-8 w-8 animate-spin mx-auto text-muted-foreground" />
                                 <p className="text-muted-foreground mt-2">Loading restaurant data...</p>
                             </div>
+                        )}
+
+                        {activeTab === 'hours' && restaurantData.placeId && (
+                            <motion.section initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="max-w-3xl">
+                                <OpeningHoursEditor placeId={restaurantData.placeId} />
+                            </motion.section>
                         )}
 
                         {activeTab === 'pricing' && (
@@ -508,49 +500,15 @@ export default function BusinessDashboard() {
                         )}
 
                         {activeTab === 'settings' && (
-                            <motion.section initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="max-w-2xl">
-                                <Card className="border-none shadow-sm">
-                                    <CardHeader>
-                                        <CardTitle>Restaurant Settings</CardTitle>
-                                        <CardDescription>Update your public restaurant profile.</CardDescription>
-                                    </CardHeader>
-                                    <CardContent>
-                                        <form onSubmit={handleUpdateSettings} className="space-y-6">
-                                            <div className="space-y-2">
-                                                <Label>Restaurant Name</Label>
-                                                <Input
-                                                    value={restaurantData.name}
-                                                    onChange={e => setRestaurantData({ ...restaurantData, name: e.target.value })}
-                                                />
-                                            </div>
-                                            <div className="space-y-2">
-                                                <Label>Business Address</Label>
-                                                <Input
-                                                    value={restaurantData.address}
-                                                    onChange={e => setRestaurantData({ ...restaurantData, address: e.target.value })}
-                                                />
-                                            </div>
-                                            <div className="grid grid-cols-2 gap-4">
-                                                <div className="space-y-2">
-                                                    <Label>Average Check (€)</Label>
-                                                    <Input
-                                                        type="number"
-                                                        value={restaurantData.avgCheck}
-                                                        onChange={e => setRestaurantData({ ...restaurantData, avgCheck: parseInt(e.target.value) })}
-                                                    />
-                                                </div>
-                                                <div className="space-y-2">
-                                                    <Label>Cuisine</Label>
-                                                    <Input
-                                                        value={restaurantData.cuisine}
-                                                        onChange={e => setRestaurantData({ ...restaurantData, cuisine: e.target.value })}
-                                                    />
-                                                </div>
-                                            </div>
-                                            <Button type="submit" className="w-full h-12 rounded-xl font-bold">Save Settings</Button>
-                                        </form>
-                                    </CardContent>
-                                </Card>
+                            <motion.section initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="max-w-3xl">
+                                {restaurantData.placeId ? (
+                                    <RestaurantEditor placeId={restaurantData.placeId} />
+                                ) : (
+                                    <div className="text-center py-10">
+                                        <Loader2 className="h-8 w-8 animate-spin mx-auto text-muted-foreground" />
+                                        <p className="text-muted-foreground mt-2">Loading restaurant data...</p>
+                                    </div>
+                                )}
                             </motion.section>
                         )}
 

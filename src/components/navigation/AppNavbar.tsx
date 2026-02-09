@@ -147,6 +147,14 @@ export default function AppNavbar() {
                 />
             </form>
 
+            {/* Owner Dashboard Link */}
+            {user && userRole === 'owner' && (
+                <Link href="/dashboard" className="hidden md:flex items-center gap-2 mr-4 text-sm font-bold text-gray-600 hover:text-primary transition-colors">
+                    <LayoutDashboard className="h-4 w-4" />
+                    Dashboard
+                </Link>
+            )}
+
             {/* Location Popover - Dynamic Display */}
             <div className="mr-4">
                 <LocationPopover

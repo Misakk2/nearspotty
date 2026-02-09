@@ -34,7 +34,17 @@ export interface Place {
     opening_hours?: {
         open_now: boolean;
         weekday_text?: string[];
+        periods?: {
+            open: { day: number; time: string };
+            close: { day: number; time: string };
+        }[];
     };
+    // Structured hours for editing (day: 0-6, time: "HH:MM")
+    openingHoursSpecification?: {
+        dayOfWeek: string[]; // "Monday", "Tuesday", etc.
+        opens: string;
+        closes: string;
+    }[];
     types: string[];
     formatted_phone_number?: string;
     website?: string;
@@ -73,5 +83,7 @@ export interface Place {
     customPhotos?: {
         url: string;
         category?: string;
+        storagePath?: string; // Added for deletion
     }[];
+    cuisineTypes?: string[];
 }

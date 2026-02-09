@@ -17,10 +17,10 @@ import {
     DialogTrigger,
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-// import { useAuth } from "@/components/auth-provider";
+import { useAuth } from "@/components/auth-provider";
 import toast from "react-hot-toast";
 import { db, storage } from "@/lib/firebase";
-import { doc, updateDoc, arrayUnion, arrayRemove, getDoc } from "firebase/firestore";
+import { doc, getDoc, collection, getDocs, setDoc, deleteDoc, writeBatch } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { Badge } from "@/components/ui/badge";
 
@@ -41,12 +41,12 @@ const ALLERGENS = ["Gluten", "Dairy", "Nuts", "Soy", "Eggs", "Fish", "Shellfish"
 const DIETARY = ["Vegetarian", "Vegan", "Gluten-Free", "Spicy", "Paleo", "Keto", "Lactose-Free", "Kosher", "Halal"];
 
 export function MenuEditor({ placeId }: { placeId: string }) {
-    // const { user: _user } = useAuth();
+    const { user } = useAuth();
     const [items, setItems] = useState<MenuItem[]>([]);
     const [loading, setLoading] = useState(true);
     const [isDialogOpen, setIsDialogOpen] = useState(false);
     const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
-    const [uplaodingImage, setUploadingImage] = useState(false);
+    const [uploadingImage, setUploadingImage] = useState(false);
 
     // Form State
     const [formData, setFormData] = useState<Partial<MenuItem>>({
@@ -57,12 +57,48 @@ export function MenuEditor({ placeId }: { placeId: string }) {
 
     useEffect(() => {
         const fetchMenu = async () => {
+            if (!placeId) return;
+
             try {
-                const docRef = doc(db, "restaurants", placeId);
-                const snap = await getDoc(docRef);
-                if (snap.exists()) {
-                    const data = snap.data();
-                    setItems(data.menu?.items || []);
+                // 1. Try to fetch from subcollection
+                const menuRef = collection(db, "restaurants", placeId, "menu");
+                const menuSnap = await getDocs(menuRef);
+
+                if (!menuSnap.empty) {
+                    // Subcollection has data, use it
+                    const loadedItems = menuSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as MenuItem));
+                    setItems(loadedItems);
+                } else {
+                    // 2. Fallback: Check for legacy array in parent doc
+                    const docRef = doc(db, "restaurants", placeId);
+                    const snap = await getDoc(docRef);
+
+                    if (snap.exists()) {
+                        const data = snap.data();
+                        const legacyItems = data.menu?.items || [];
+
+                        if (legacyItems.length > 0) {
+                            console.log("Found legacy menu items, migrating...");
+                            // 3. Lazy Migration: Move to subcollection
+                            const batch = writeBatch(db);
+
+                            legacyItems.forEach((item: MenuItem) => {
+                                const newDocRef = doc(menuRef, item.id || crypto.randomUUID());
+                                batch.set(newDocRef, item);
+                            });
+
+                            // Optionally purge legacy array to avoid confusion? 
+                            // Let's iterate: For now, we prefer keeping data safe. 
+                            // We will just write to new location. 
+                            // Future cleanup can remove 'menu.items'.
+
+                            await batch.commit();
+                            setItems(legacyItems);
+                            toast.success("Menu optimized for new version");
+                        } else {
+                            setItems([]);
+                        }
+                    }
                 }
             } catch (error) {
                 console.error("Error fetching menu:", error);
@@ -96,25 +132,14 @@ export function MenuEditor({ placeId }: { placeId: string }) {
                 dietary: formData.dietary || []
             };
 
-            const docRef = doc(db, "restaurants", placeId);
+            // New Subcollection Logic
+            const itemRef = doc(db, "restaurants", placeId, "menu", newItem.id);
+            await setDoc(itemRef, newItem);
 
             if (editingItem) {
-                // Remove old, add new (to update)
-                // Note: Firestore array manipulation for objects is tricky if not exact match.
-                // Better to read-modify-write for arrays of objects or use a subcollection.
-                // For simplicity/speed with smaller menus, we'll read-modify-write the whole array.
-                const updatedItems = items.map(i => i.id === editingItem.id ? newItem : i);
-                await updateDoc(docRef, {
-                    "menu.items": updatedItems,
-                    updatedAt: new Date().toISOString()
-                });
-                setItems(updatedItems);
+                setItems(items.map(i => i.id === editingItem.id ? newItem : i));
                 toast.success("Item updated");
             } else {
-                await updateDoc(docRef, {
-                    "menu.items": arrayUnion(newItem),
-                    updatedAt: new Date().toISOString()
-                });
                 setItems([...items, newItem]);
                 toast.success("Item added");
             }
@@ -130,11 +155,9 @@ export function MenuEditor({ placeId }: { placeId: string }) {
     const handleDelete = async (item: MenuItem) => {
         if (!confirm("Are you sure you want to delete this item?")) return;
         try {
-            const docRef = doc(db, "restaurants", placeId);
-            await updateDoc(docRef, {
-                "menu.items": arrayRemove(item),
-                updatedAt: new Date().toISOString()
-            });
+            const itemRef = doc(db, "restaurants", placeId, "menu", item.id);
+            await deleteDoc(itemRef);
+
             setItems(items.filter(i => i.id !== item.id));
             toast.success("Item deleted");
         } catch (error) {
@@ -147,10 +170,34 @@ export function MenuEditor({ placeId }: { placeId: string }) {
         const file = e.target.files?.[0];
         if (!file) return;
 
+        if (!user) {
+            toast.error("You must be logged in to upload images");
+            return;
+        }
+
+        // 1. Validate File Size (Max 5MB)
+        if (file.size > 5 * 1024 * 1024) {
+            toast.error("Image size must be less than 5MB");
+            return;
+        }
+
+        // 2. Validate File Type
+        if (!file.type.startsWith('image/')) {
+            toast.error("File must be an image");
+            return;
+        }
+
         setUploadingImage(true);
         try {
-            const storageRef = ref(storage, `restaurants/${placeId}/menu/${Date.now()}_${file.name}`);
-            const snapshot = await uploadBytes(storageRef, file);
+            // 3. Sanitize Filename
+            const sanitizedName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
+            const storageRef = ref(storage, `restaurants/${placeId}/menu/${Date.now()}_${sanitizedName}`);
+
+            const metadata = {
+                contentType: file.type,
+            };
+
+            const snapshot = await uploadBytes(storageRef, file, metadata);
             const url = await getDownloadURL(snapshot.ref);
             setFormData(prev => ({ ...prev, imageUrl: url }));
             toast.success("Image uploaded");
@@ -255,8 +302,8 @@ export function MenuEditor({ placeId }: { placeId: string }) {
                                         </>
                                     )}
                                     <div className="flex-1">
-                                        <Input type="file" accept="image/*" onChange={handleImageUpload} disabled={uplaodingImage} />
-                                        {uplaodingImage && <p className="text-xs text-muted-foreground mt-1">Uploading...</p>}
+                                        <Input type="file" accept="image/*" onChange={handleImageUpload} disabled={uploadingImage} />
+                                        {uploadingImage && <p className="text-xs text-muted-foreground mt-1">Uploading...</p>}
                                     </div>
                                 </div>
                             </div>

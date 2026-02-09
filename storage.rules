@@ -2,6 +2,12 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
     
+    // Helper function to validate image uploads
+    function isValidImage() {
+      return request.resource.size < 5 * 1024 * 1024 // Max 5MB
+          && request.resource.contentType.matches('image/.*'); // Must be an image
+    }
+
     // --- Public Assets (Places Cache) ---
     // Explicitly allow public read for cached place photos
     match /places/{allPaths=**} {
@@ -11,27 +17,54 @@ service firebase.storage {
     // --- User Profile Images ---
     match /users/{userId}/{allPaths=**} {
       allow read: if request.auth != null;
-      allow write: if request.auth != null && request.auth.uid == userId;
+      allow write: if request.auth != null 
+                  && request.auth.uid == userId
+                  && isValidImage();
     }
 
     // --- Website Assets ---
     match /websites/{websiteId}/{allPaths=**} {
       allow read: if true;
       // Secure Write: Verify ownership via Firestore document
-      allow write: if request.auth != null && 
-        firestore.get(/databases/(default)/documents/websites/$(websiteId)).data.ownerId == request.auth.uid;
+      allow write: if request.auth != null 
+                  && firestore.get(/databases/(default)/documents/websites/$(websiteId)).data.ownerId == request.auth.uid
+                  && isValidImage();
     }
 
     // --- Restaurant Owner Images ---
     // Images uploaded by restaurant owners (claimed restaurants only)
     match /restaurants/{restaurantId}/owner-images/{imageId} {
-      // Public read for all restaurant images
       allow read: if true;
       
-      // Only the owner of the restaurant can upload/delete images
-      // Verify ownership via Firestore document
-      allow write: if request.auth != null && 
-        firestore.get(/databases/(default)/documents/restaurants/$(restaurantId)).data.ownerId == request.auth.uid;
+      // Separate rules to handle request.resource correctly
+      allow create: if request.auth != null 
+                  && firestore.get(/databases/(default)/documents/restaurants/$(restaurantId)).data.ownerId == request.auth.uid
+                  && isValidImage(); // Validates request.resource
+                  
+      allow update: if request.auth != null 
+                  && firestore.get(/databases/(default)/documents/restaurants/$(restaurantId)).data.ownerId == request.auth.uid
+                  && isValidImage();
+                  
+      allow delete: if request.auth != null 
+                  && firestore.get(/databases/(default)/documents/restaurants/$(restaurantId)).data.ownerId == request.auth.uid;
+                  // No image validation on delete (request.resource is null)
+    }
+
+    // --- Restaurant Menu Images ---
+    // Specific rule for menu items images
+    match /restaurants/{restaurantId}/menu/{imageId} {
+      allow read: if true;
+      
+      allow create: if request.auth != null 
+                  && firestore.get(/databases/(default)/documents/restaurants/$(restaurantId)).data.ownerId == request.auth.uid
+                  && isValidImage();
+                  
+      allow update: if request.auth != null 
+                  && firestore.get(/databases/(default)/documents/restaurants/$(restaurantId)).data.ownerId == request.auth.uid
+                  && isValidImage();
+                  
+      allow delete: if request.auth != null 
+                  && firestore.get(/databases/(default)/documents/restaurants/$(restaurantId)).data.ownerId == request.auth.uid;
     }
   }
 }

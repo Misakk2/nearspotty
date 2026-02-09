@@ -214,20 +214,8 @@ export async function POST(request: Request) {
             // We need to fetch the doc again or use the one we found.
             // Since I cannot easily mutate usersSnapshot in a type-safe way, I will change the logic structure below.
 
-            let userRef: FirebaseFirestore.DocumentReference | null = null;
 
-            if (!usersSnapshot.empty) {
-                userRef = usersSnapshot.docs[0].ref;
-            } else if (subscriptionId) {
-                // Repeat fallback logic cleaner to set userRef
-                try {
-                    const subscription = await stripe.subscriptions.retrieve(subscriptionId); // Metadata already expanded if we did above? No, let's just do it here if needed.
-                    // Wait, to minimize API calls, let's do the fallback properly.
-                } catch (e) { }
-            }
-
-            // IGNORE THE ABOVE COMMENTARY, I WILL PROVIDE THE CLEAN IMPLEMENTATION BELOW
-
+            // Re-evaluate if we have a user now (either from initial query or fallback)
             let targetUserDoc: FirebaseFirestore.DocumentSnapshot | null = null;
 
             if (!usersSnapshot.empty) {
@@ -254,10 +242,23 @@ export async function POST(request: Request) {
 
             if (targetUserDoc) {
                 const userRef = targetUserDoc.ref;
+                const userId = targetUserDoc.id;
 
                 // ✅ RETRIEVE SUBSCRIPTION TO GET STATUS AND DATES AND PRICE ID
                 let subscriptionStatus: Stripe.Subscription.Status = 'active';
                 let currentPeriodEnd: string | null = null;
+                try {
+                    // Check if user exists
+                    const userSnap = await getAdminDb().collection('users').doc(userId).get();
+
+                    if (!userSnap.exists) {
+                        console.error(`[Stripe Webhook] ❌ User ${userId} not found for subscription ${subscriptionId}`);
+                        // We might want to create the user or handle this case?
+                        // For now, just log.
+                    }
+                } catch {
+                    // Ignore error checking user existence
+                }
                 let priceId: string | undefined = undefined;
 
                 if (subscriptionId) {

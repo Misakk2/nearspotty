@@ -95,18 +95,35 @@ service cloud.firestore {
         // ✅ FIX 2: Restaurant document must exist
         exists(/databases/$(database)/documents/restaurants/$(request.resource.data.placeId)) &&
         
-        // ✅ FIX 3: Restaurant must be claimed
-        get(/databases/$(database)/documents/restaurants/$(request.resource.data.placeId)).data.claimed == true &&
+        // ✅ FIX 3: Restaurant must be claimed (using correct field name)
+        get(/databases/$(database)/documents/restaurants/$(request.resource.data.placeId)).data.isClaimed == true &&
         
+        // ✅ FIX 4: Check credits (Everyone can reserve EXCEPT free user with 0 tokens)
+        (
+          // 1. Premium users are always allowed
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('tier', 'free') != 'free' ||
+          
+          // 2. Free users allowed if they have tokens > 0
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('credits', {'remaining': 0}).remaining > 0
+        ) &&
+
         // ✅ NEW: Validate required fields
         fieldExists(request.resource.data.date) &&
         fieldExists(request.resource.data.time) &&
         request.resource.data.guests > 0 &&
         request.resource.data.guests <= 20; // Max party size
       
-      // ✅ UPDATE/DELETE: Only by reservation creator
-      allow update, delete: if isAuthenticated() && 
-        resource.data.userId == request.auth.uid;
+      // ✅ UPDATE/DELETE: Reservation creator OR Restaurant Owner
+      allow update: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid || 
+        (
+          fieldExists(resource.data.placeId) &&
+          exists(/databases/$(database)/documents/restaurants/$(resource.data.placeId)) &&
+          get(/databases/$(database)/documents/restaurants/$(resource.data.placeId)).data.ownerId == request.auth.uid
+        )
+      );
+
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
     }
     
     // =================================================================
@@ -162,7 +179,7 @@ service cloud.firestore {
         request.resource.data.placeId == restaurantId && // ID must match
         
         // ✅ NEW: claimed must be true (prevents orphaned restaurants)
-        request.resource.data.claimed == true
+        request.resource.data.isClaimed == true
       );
       
       // ✅ FIX: ONLY owner can update

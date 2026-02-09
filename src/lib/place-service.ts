@@ -18,21 +18,35 @@ export async function getPlaceDetails(placeId: string): Promise<Place | null> {
             const data = doc.data();
             // If claimed, capture the claim data
             if (data?.isClaimed) {
+                // Check for menu subcollection first
+                const menuSnap = await getAdminDb().collection("restaurants").doc(placeId).collection("menu").get();
+                let menuItems = data.menu?.items || [];
+
+                if (!menuSnap.empty) {
+                    menuItems = menuSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as { id: string; name: string; price: number; category: string }));
+                }
+
                 // Prepare claim data to merge later if needed
                 claimData = {
                     isClaimed: true,
-                    menu: data.menu,
+                    menu: { items: menuItems },
                     tableConfig: data.tableConfig,
-                    customPhotos: data.images?.owner
+                    customPhotos: data.customPhotos || data.images?.owner,
+                    // Map root fields that we save in RestaurantEditor
+                    description: data.description,
+                    website: data.website,
+                    formatted_phone_number: data.formatted_phone_number,
+                    price_level: data.price_level,
+                    cuisineTypes: data.cuisineTypes,
+                    openingHoursSpecification: data.openingHoursSpecification
                 };
 
                 // If we also have full details, we can return immediately (Fast Path)
-                if (data.details && data.details.name) {
+                if (data.details && data.details.name && data.images) {
                     // console.log(`[PlaceService] 🟢 Served from Strict Claim: ${placeId}`);
 
-                    // Map Firestore Restaurant -> Place
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    const photos = (data.images?.owner || []).map((img: any) => ({
+                    // Merge Photos: Owner photos first, then Google photos
+                    const ownerPhotos = (data.customPhotos || data.images?.owner || []).map((img: { url: string }) => ({
                         height: 0,
                         width: 0,
                         name: "owner_upload",
@@ -41,19 +55,15 @@ export async function getPlaceDetails(placeId: string): Promise<Place | null> {
                         url: img.url
                     }));
 
-                    // Fallback to Google photos if owner hasn't uploaded any
-                    if (photos.length === 0 && data.images?.google) {
-                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                        data.images.google.forEach((img: any) => {
-                            photos.push({
-                                height: img.height,
-                                width: img.width,
-                                name: img.photoReference,
-                                photo_reference: img.photoReference,
-                                proxyPhotoUrl: img.cachedUrl || `/api/images/proxy?id=${placeId}&ref=${img.photoReference}`
-                            });
-                        });
-                    }
+                    const googlePhotos = (data.images?.google || []).map((img: { height: number; width: number; photoReference: string; cachedUrl?: string }) => ({
+                        height: img.height,
+                        width: img.width,
+                        name: img.photoReference,
+                        photo_reference: img.photoReference,
+                        proxyPhotoUrl: img.cachedUrl || `/api/images/proxy?id=${placeId}&ref=${img.photoReference}`
+                    }));
+
+                    const photos = [...ownerPhotos, ...googlePhotos];
 
                     return {
                         place_id: placeId,
@@ -67,20 +77,21 @@ export async function getPlaceDetails(placeId: string): Promise<Place | null> {
                         types: data.details.types || [],
                         geometry: data.details.geometry,
                         opening_hours: {
-                            open_now: false, // Calc logic needed if strictly offline, or use data.details.openingHours
+                            open_now: data.details.openingHours?.openNow || false,
                             weekday_text: data.details.openingHours?.weekdayDescriptions || []
                         },
+                        openingHoursSpecification: data.openingHoursSpecification || data.details.openingHoursSpecification,
                         reviews: data.details.reviews || [], // Use cached reviews
                         photos: photos,
                         proxyPhotoUrl: photos.length > 0 ? photos[0].proxyPhotoUrl : undefined,
                         imageSrc: photos.length > 0 ? photos[0].proxyPhotoUrl : "",
-                        description: data.details.editorialSummary || data.details.description,
+                        description: data.description || data.details.editorialSummary || data.details.description,
 
                         // Managed Fields
                         ...claimData
                     } as Place;
                 } else {
-                    console.warn(`[PlaceService] ⚠️ Claimed place ${placeId} missing details in Firestore. Falling back to Google.`);
+                    console.warn(`[PlaceService] ⚠️ Claimed place ${placeId} missing details or images in Firestore. Falling back to Google.`);
                 }
             }
         }
@@ -97,7 +108,9 @@ export async function getPlaceDetails(placeId: string): Promise<Place | null> {
     const cachedData = await getCache<Place>("place_details_cache_v2", cacheKey);
 
     if (cachedData) {
-        // Merge claim data if we found it
+        // For claimed restaurants, we might want to skip cache or use a very short TTL
+        // But for now, we'll just merge claimData. 
+        // NOTE: If owner just updated their data, we should probably have a way to invalidate this.
         if (claimData) {
             return { ...cachedData, ...claimData };
         }
@@ -125,8 +138,7 @@ export async function getPlaceDetails(placeId: string): Promise<Place | null> {
     const data = await res.json();
 
     // 3. Map Response
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const photos = (data.photos || []).map((p: any) => ({
+    const photos = (data.photos || []).map((p: { heightPx: number; widthPx: number; name: string }) => ({
         height: p.heightPx,
         width: p.widthPx,
         name: p.name, // V1 name
@@ -154,8 +166,8 @@ export async function getPlaceDetails(placeId: string): Promise<Place | null> {
             open_now: data.regularOpeningHours?.openNow || false,
             weekday_text: data.regularOpeningHours?.weekdayDescriptions || []
         },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        reviews: (data.reviews || []).map((r: any) => ({
+        openingHoursSpecification: mapOpeningHoursToSpec(data.regularOpeningHours?.periods),
+        reviews: (data.reviews || []).map((r: { authorAttribution?: { displayName?: string; photoUri?: string }; rating: number; relativePublishTimeDescription: string; text?: { text: string }; publishTime?: string }) => ({
             author_name: r.authorAttribution?.displayName || "Anonymous",
             profile_photo_url: r.authorAttribution?.photoUri || "",
             rating: r.rating,
@@ -175,6 +187,14 @@ export async function getPlaceDetails(placeId: string): Promise<Place | null> {
         try {
             // We have a claimed place with missing details. Let's fix that record.
             const { getAdminDb } = await import("@/lib/firebase-admin");
+
+            // Extract google photos for storage
+            const googlePhotos = photos.map((p: { height: number; width: number; name?: string; photo_reference?: string }) => ({
+                height: p.height,
+                width: p.width,
+                photoReference: p.name || p.photo_reference,
+            }));
+
             await getAdminDb().collection("restaurants").doc(placeId).set({
                 details: {
                     name: mappedResult.name,
@@ -188,20 +208,44 @@ export async function getPlaceDetails(placeId: string): Promise<Place | null> {
                     geometry: mappedResult.geometry,
                     // We skip photos array for now to avoid complexity, or deep copy it
                 },
-                updatedAt: new Date().toISOString()
+                images: {
+                    google: googlePhotos
+                },
+                updatedAt: new Date().toISOString(),
+                openingHoursSpecification: mappedResult.openingHoursSpecification
             }, { merge: true });
-            console.log(`[PlaceService] 🩹 Self-healed missing details for claimed place ${placeId}`);
+            console.log(`[PlaceService] 🩹 Self-healed missing details/images for claimed place ${placeId}`);
         } catch (healErr) {
             console.error("[PlaceService] Failed to self-heal claimed place:", healErr);
         }
     }
 
     // 4. Save to Cache
-    await setCache("place_details_cache_v2", cacheKey, mappedResult, 24 * 60 * 60 * 1000);
+    // TTL: 24h for normal places, 5m for claimed places to ensure owner changes are visible
+    const ttl = claimData?.isClaimed ? 5 * 60 * 1000 : 24 * 60 * 60 * 1000;
+    await setCache("place_details_cache_v2", cacheKey, mappedResult, ttl);
 
     // Merge claim data before returning
     if (claimData) {
-        return { ...mappedResult, ...claimData };
+        // Merger Photos: Owner photos first, then Google photos
+        const ownerPhotos = (claimData.customPhotos || []).map((img: { url: string }) => ({
+            height: 0,
+            width: 0,
+            name: "owner_upload",
+            photo_reference: "owner_upload",
+            proxyPhotoUrl: img.url,
+            url: img.url
+        }));
+
+        const mergedPhotos = [...ownerPhotos, ...(mappedResult.photos || [])];
+
+        return {
+            ...mappedResult,
+            ...claimData,
+            photos: mergedPhotos,
+            proxyPhotoUrl: mergedPhotos.length > 0 ? mergedPhotos[0].proxyPhotoUrl : mappedResult.proxyPhotoUrl,
+            imageSrc: mergedPhotos.length > 0 ? mergedPhotos[0].proxyPhotoUrl || "" : mappedResult.imageSrc || ""
+        };
     }
 
     return mappedResult;
@@ -217,4 +261,21 @@ function mapPriceLevel(level: string): number | undefined {
         case "PRICE_LEVEL_VERY_EXPENSIVE": return 4;
         default: return undefined;
     }
+}
+
+function mapOpeningHoursToSpec(periods: { open: { hour: number; minute: number; day: number }; close?: { hour: number; minute: number; day: number } }[]): { dayOfWeek: string[]; opens: string; closes: string; }[] | undefined {
+    if (!periods || !Array.isArray(periods)) return undefined;
+
+    const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+    return periods.map(p => {
+        const openTime = p.open ? `${String(p.open.hour).padStart(2, '0')}:${String(p.open.minute).padStart(2, '0')}` : "00:00";
+        const closeTime = p.close ? `${String(p.close.hour).padStart(2, '0')}:${String(p.close.minute).padStart(2, '0')}` : "23:59";
+
+        return {
+            dayOfWeek: [days[p.open.day]],
+            opens: openTime,
+            closes: closeTime
+        };
+    });
 }

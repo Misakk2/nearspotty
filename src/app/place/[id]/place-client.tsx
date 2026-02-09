@@ -409,6 +409,56 @@ export default function PlaceDetailsClient({ place }: PlaceDetailsClientProps) {
                                 </Card>
                             )}
 
+                            {/* Opening Hours Card */}
+                            {(place.opening_hours?.weekday_text || place.openingHoursSpecification) && (
+                                <Card>
+                                    <CardContent className="p-4">
+                                        <div className="flex items-center gap-2 mb-3">
+                                            <Clock className="h-4 w-4 text-primary" />
+                                            <h4 className="font-semibold text-sm">Opening Hours</h4>
+                                            {place.opening_hours?.open_now !== undefined && (
+                                                <span className={`ml-auto text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${place.opening_hours.open_now ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                                    {place.opening_hours.open_now ? 'Open' : 'Closed'}
+                                                </span>
+                                            )}
+                                        </div>
+
+                                        <div className="space-y-1.5">
+                                            {/* Priority: Structured specification for better formatting */}
+                                            {place.openingHoursSpecification && place.openingHoursSpecification.length > 0 ? (
+                                                ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map(day => {
+                                                    const specs = place.openingHoursSpecification?.filter(s => s.dayOfWeek.includes(day));
+                                                    const isToday = new Date().toLocaleDateString('en-US', { weekday: 'long' }) === day;
+
+                                                    return (
+                                                        <div key={day} className={`flex justify-between text-xs ${isToday ? 'font-bold text-gray-900' : 'text-gray-600'}`}>
+                                                            <span className="w-20">{day}</span>
+                                                            <span className="flex-1 text-right">
+                                                                {specs && specs.length > 0
+                                                                    ? specs.map(s => `${s.opens} – ${s.closes}`).join(", ")
+                                                                    : "Closed"}
+                                                            </span>
+                                                        </div>
+                                                    );
+                                                })
+                                            ) : (
+                                                /* Fallback: Google's raw weekday_text */
+                                                place.opening_hours?.weekday_text?.map((text, i) => {
+                                                    const [day, hours] = text.split(": ");
+                                                    const isToday = new Date().toLocaleDateString('en-US', { weekday: 'long' }) === day;
+                                                    return (
+                                                        <div key={i} className={`flex justify-between text-xs ${isToday ? 'font-bold text-gray-900' : 'text-gray-600'}`}>
+                                                            <span className="w-20">{day}</span>
+                                                            <span className="flex-1 text-right">{hours}</span>
+                                                        </div>
+                                                    );
+                                                })
+                                            )}
+                                        </div>
+                                    </CardContent>
+                                </Card>
+                            )}
+
                             {/* Location Card */}
                             <Card>
                                 <CardContent className="p-4">
@@ -447,6 +497,7 @@ export default function PlaceDetailsClient({ place }: PlaceDetailsClientProps) {
                     isOpen={isReservationOpen}
                     onClose={() => setIsReservationOpen(false)}
                     placeName={place.name}
+                    placeId={place.place_id}
                 />
             </main>
         </div>
