@@ -134,6 +134,25 @@ function BusinessOnboardingForm() {
         checkSubscription();
     }, [user, router]);
 
+    // Pre-fill form from URL params
+    useEffect(() => {
+        const placeId = searchParams.get("placeId");
+        const name = searchParams.get("restaurantName");
+        const address = searchParams.get("restaurantAddress");
+        const city = searchParams.get("city");
+
+        if (placeId && name) {
+            setFormData(prev => ({
+                ...prev,
+                claimedPlaceId: placeId,
+                restaurantName: name,
+                restaurantAddress: address || "",
+                city: city || address?.split(",").pop()?.trim() || "",
+            }));
+            // If we have place details, validation for step 1 might be satisfied
+        }
+    }, [searchParams]);
+
     /**
      * Handle plan selection - redirect to Stripe Checkout
      */
@@ -163,7 +182,8 @@ function BusinessOnboardingForm() {
                     // Return to this page with success flag and session_id
                     successUrl: `${window.location.origin}/business-onboarding?payment=success&plan=${planId}&session_id={CHECKOUT_SESSION_ID}`,
                     cancelUrl: `${window.location.origin}/business-onboarding`,
-                    trialDays: 14 // Start with a 14-day trial
+                    trialDays: 14, // Start with a 14-day trial
+                    placeId: formData.claimedPlaceId // Pass placeId for auto-claiming
                 }),
             });
 

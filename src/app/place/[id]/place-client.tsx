@@ -386,7 +386,7 @@ export default function PlaceDetailsClient({ place }: PlaceDetailsClientProps) {
                     <div className="md:col-span-1">
                         <div className="sticky top-24 space-y-4">
                             {/* Booking Card - Conditional */}
-                            {(place.isClaimed && (place.tableConfig?.bookableTables || 0) > 0) && (
+                            {place.isClaimed && (
                                 <Card className="border-2 border-primary/10 shadow-lg overflow-hidden">
                                     <div className="bg-primary/5 p-3 text-center border-b border-primary/10">
                                         <p className="text-sm font-semibold text-primary">NearSpotty Member Perk</p>
@@ -432,7 +432,7 @@ export default function PlaceDetailsClient({ place }: PlaceDetailsClientProps) {
                 </div>
 
                 {/* Mobile Fixed CTA - Conditional */}
-                {(place.isClaimed && (place.tableConfig?.bookableTables || 0) > 0) && (
+                {place.isClaimed && (
                     <div className="fixed bottom-0 left-0 right-0 p-4 bg-white/95 backdrop-blur border-t md:hidden z-50 flex items-center gap-3 shadow-[0_-5px_15px_-5px_rgba(0,0,0,0.1)]">
                         <Button variant="outline" size="icon" className="shrink-0">
                             <Share2 className="h-4 w-4" />

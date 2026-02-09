@@ -19,7 +19,7 @@ export async function POST(req: Request) {
             throw new Error("STRIPE_SECRET_KEY is missing");
         }
 
-        const { userId, userEmail, priceId, planName, successUrl, cancelUrl, trialDays } = await req.json();
+        const { userId, userEmail, priceId, planName, successUrl, cancelUrl, trialDays, placeId } = await req.json();
 
         if (!userId || !priceId) {
             return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
@@ -64,7 +64,8 @@ export async function POST(req: Request) {
             metadata: {
                 userId: userId,
                 plan: planName || 'premium',
-                role: planName ? 'owner' : 'diner'
+                role: planName ? 'owner' : 'diner',
+                placeId: placeId || null // Pass placeId for auto-claiming in webhook
             },
         });
 
