@@ -196,7 +196,7 @@ async function findLightCandidates(
     // --- Step 1A: Check Unified Grid Cache (v2) ---
     // This allows consistency between "Discover" mode and "Search"
     try {
-        const gridKeys = getNearbyGridKeys(lat, lng);
+        const gridKeys = getNearbyGridKeys(lat, lng, radius);
         console.log(`[Light] Checking ${gridKeys.length} grid keys for cache hit...`);
 
         // Parallel fetch of grid cells

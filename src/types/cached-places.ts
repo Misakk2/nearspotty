@@ -60,6 +60,9 @@ export interface PlacesCacheEntry {
         radius: number;
         type?: string;
     };
+    // Cache Warming Signals
+    last_accessed?: number; // Timestamp of last HIT
+    usage_count?: number;   // Number of HITS to determine popularity
 }
 
 /**
@@ -70,21 +73,45 @@ export interface PlacesCacheEntry {
  * Creates a grid key for caching based on coordinates and radius.
  * Uses ~5km granularity (0.05 degrees) to group nearby searches.
  */
-export function createGridKey(lat: number, lng: number): string {
-    const GRID_SIZE = 0.05; // Approx 5.5km
+/**
+ * Creates a grid key for caching based on coordinates and radius.
+ * Uses dynamic grid sizing: larger radius -> larger grid cells.
+ * Base grid size is ~5.5km (0.05 deg).
+ */
+export function createGridKey(lat: number, lng: number, radiusMeters: number = 5000): string {
+    // Dynamic grid sizing formula:
+    // 5000m -> 0.05 deg (approx 5.5km)
+    // 1000m -> 0.01 deg (approx 1.1km)
+    // This prevents small radius searches from over-fetching large grids,
+    // and large radius searches from fragmenting into too many small grids.
+
+    // Convert logic: 1 degree approx 111km.
+    // We want grid size to be roughly 1.5x - 2x the search radius to cover edges.
+    // Min grid size 0.01 (approx 1km) to avoid too many small keys.
+    const targetGridSizeDeg = (radiusMeters / 111000) * 1.5;
+
+    // Snap to nearest 0.01 step for consistency
+    const GRID_SIZE = Math.max(0.01, Math.ceil(targetGridSizeDeg * 100) / 100);
+
     const roundedLat = Math.floor(lat / GRID_SIZE) * GRID_SIZE;
     const roundedLng = Math.floor(lng / GRID_SIZE) * GRID_SIZE;
 
-    // Format to 2 decimal places to avoid floating point issues
-    return `${roundedLat.toFixed(2)}_${roundedLng.toFixed(2)}`;
+    // Include radius bucket in key to separate "local" vs "wide" searches
+    // Bucket radius to reduce fragmentation: nearest 1000m
+    const radiusBucket = Math.round(radiusMeters / 1000) * 1000;
+
+    return `${roundedLat.toFixed(2)}_${roundedLng.toFixed(2)}_r${radiusBucket}`;
 }
 
 /**
  * Returns grid keys for the current location and all surrounding grids.
  * Used to check for existing cache coverage including overlaps.
  */
-export function getNearbyGridKeys(lat: number, lng: number): string[] {
-    const GRID_SIZE = 0.05;
+export function getNearbyGridKeys(lat: number, lng: number, radiusMeters: number = 5000): string[] {
+    // Re-calculate grid size used in createGridKey logic for consistency
+    const targetGridSizeDeg = (radiusMeters / 111000) * 1.5;
+    const GRID_SIZE = Math.max(0.01, Math.ceil(targetGridSizeDeg * 100) / 100);
+
     const keys: string[] = [];
 
     // Check center and 8 surrounding grids
@@ -92,7 +119,7 @@ export function getNearbyGridKeys(lat: number, lng: number): string[] {
         for (let y = -1; y <= 1; y++) {
             const neighborLat = lat + (x * GRID_SIZE);
             const neighborLng = lng + (y * GRID_SIZE);
-            keys.push(createGridKey(neighborLat, neighborLng));
+            keys.push(createGridKey(neighborLat, neighborLng, radiusMeters));
         }
     }
     return [...new Set(keys)]; // Dedup

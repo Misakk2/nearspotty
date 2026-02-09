@@ -31,8 +31,8 @@ export async function GET(request: NextRequest) {
     }
 
     // Create grid key for caching
-    // Note: Radius is no longer part of the key to increase hit rate (coarse grid)
-    const gridKey = createGridKey(lat, lng);
+    // Note: Radius IS now part of the key to support specific search sizes
+    const gridKey = createGridKey(lat, lng, radius);
     const now = Date.now();
 
     try {

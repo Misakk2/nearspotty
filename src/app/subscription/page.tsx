@@ -74,7 +74,12 @@ export default function SubscriptionPage() {
             });
             const data = await response.json();
             if (data.url) {
-                window.location.href = data.url;
+                console.log("Redirecting to Stripe...", data.url);
+                // Small delay to allow any pending browser extension messages or analytics to settle
+                // preventing "message channel closed" errors
+                setTimeout(() => {
+                    window.location.href = data.url;
+                }, 100);
             } else {
                 throw new Error(data.error || "Failed to create checkout session");
             }

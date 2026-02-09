@@ -169,7 +169,11 @@ function BusinessOnboardingForm() {
 
             const data = await res.json();
             if (data.url) {
-                window.location.href = data.url;
+                console.log("Redirecting to Stripe...", data.url);
+                // Small delay to allow pending processes to settle
+                setTimeout(() => {
+                    window.location.href = data.url;
+                }, 100);
             } else {
                 toast.dismiss();
                 toast.error("Failed to create checkout session");
