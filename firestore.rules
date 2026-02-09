@@ -1,77 +1,219 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Helper functions
+    
+    // =================================================================
+    // HELPER FUNCTIONS
+    // =================================================================
+    
     function isAuthenticated() {
       return request.auth != null;
     }
     
     function isOwner(userId) {
-      return request.auth.uid == userId;
-    }
-
-    // User profiles
-    match /users/{userId} {
-      allow read, write: if isOwner(userId);
-      
-      match /{allPaths=**} {
-        allow read, write: if isOwner(userId);
-      }
-    }
-
-    // Cities Cache - Read-only for clients (Admin SDK handles writes)
-    match /cities/{cityId} {
-      allow read: if true; // Public: Reference data
-      allow write: if false; // 🔒 Protected: Use /api/cities/add
-    }
-
-    // Restaurants/Websites
-    match /websites/{websiteId} {
-      allow read: if true; // Publicly viewable
-      
-      // CREATE: Allow if user sets themselves as owner
-      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid;
-      
-      // UPDATE/DELETE: Allow if user IS the owner
-      allow update, delete: if isAuthenticated() && resource.data.ownerId == request.auth.uid;
-    }
-
-    // Reservations
-    match /reservations/{resId} {
-      allow read: if isAuthenticated() && (
-        resource.data.userId == request.auth.uid || 
-        get(/databases/$(database)/documents/websites/$(resource.data.websiteId)).data.ownerId == request.auth.uid
-      );
-      // Prevent IDOR: Ensure user can only create reservation for themselves
-      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
-    }
-
-    // Caches - Server only usually, but let's allow authenticated read for debugging/performance if needed
-    // Best practice: server-only paths shouldn't be accessible by clients at all.
-    match /places_nearby_cache/{any} {
-      allow read, write: if false; // Server-only (Admin SDK bypasses this)
-    }
-    match /place_details_cache/{any} {
-      allow read, write: if false; // Server-only
+      return isAuthenticated() && request.auth.uid == userId;
     }
     
-    // AI Dinner Flow caches - Server-only
-    match /cached_places_grid/{any} {
-      allow read, write: if false; // Server-only (Admin SDK bypasses)
+    // ✅ NEW: Check if user is admin (for future admin panel)
+    function isAdmin() {
+      return isAuthenticated() && 
+        get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'admin';
     }
-    match /restaurant_scores/{any} {
-      allow read, write: if false; // Server-only (Admin SDK bypasses)
+    
+    // ✅ NEW: Validate field exists and is not null
+    function fieldExists(field) {
+      return field != null && field != "";
     }
-
-    // Restaurant Entity - supports caching and owner uploads
-    match /restaurants/{restaurantId} {
-      // Public read for cached images
+    
+    // =================================================================
+    // USER PROFILES
+    // =================================================================
+    
+    match /users/{userId} {
+      // ✅ IMPROVED: Add role validation
+      allow read: if isOwner(userId) || isAdmin();
+      
+      allow write: if isOwner(userId) && (
+        // ✅ Prevent role escalation
+        !request.resource.data.keys().hasAny(['role']) ||
+        request.resource.data.role == resource.data.role ||
+        isAdmin()
+      );
+      
+      // Subcollections (preferences, usage, etc.)
+      match /{allPaths=**} {
+        allow read, write: if isOwner(userId) || isAdmin();
+      }
+    }
+    
+    // =================================================================
+    // CITIES CACHE (Public Reference Data)
+    // =================================================================
+    
+    match /cities/{cityId} {
+      allow read: if true;
+      allow write: if false; // Admin SDK only
+    }
+    
+    // =================================================================
+    // WEBSITES (Legacy - if you still use this)
+    // =================================================================
+    
+    match /websites/{websiteId} {
       allow read: if true;
       
-      // Only authenticated users can write (claim ownership,  upload images)
-      allow create, update: if request.auth != null;
-      allow delete: if request.auth != null;
+      allow create: if isAuthenticated() && 
+        request.resource.data.ownerId == request.auth.uid;
+      
+      allow update, delete: if isAuthenticated() && 
+        resource.data.ownerId == request.auth.uid;
+    }
+    
+    // =================================================================
+    // RESERVATIONS (CRITICAL SECURITY)
+    // =================================================================
+    
+    match /reservations/{resId} {
+      // ✅ READ: User can see their own OR restaurant owner can see theirs
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid || 
+        (
+          fieldExists(resource.data.placeId) &&
+          exists(/databases/$(database)/documents/restaurants/$(resource.data.placeId)) &&
+          get(/databases/$(database)/documents/restaurants/$(resource.data.placeId)).data.ownerId == request.auth.uid
+        )
+      );
+      
+      // ✅ CREATE: Strict validation
+      allow create: if isAuthenticated() && 
+        // User can only create for themselves
+        request.resource.data.userId == request.auth.uid &&
+        
+        // ✅ FIX 1: Validate placeId exists
+        fieldExists(request.resource.data.placeId) &&
+        
+        // ✅ FIX 2: Restaurant document must exist
+        exists(/databases/$(database)/documents/restaurants/$(request.resource.data.placeId)) &&
+        
+        // ✅ FIX 3: Restaurant must be claimed
+        get(/databases/$(database)/documents/restaurants/$(request.resource.data.placeId)).data.claimed == true &&
+        
+        // ✅ NEW: Validate required fields
+        fieldExists(request.resource.data.date) &&
+        fieldExists(request.resource.data.time) &&
+        request.resource.data.guests > 0 &&
+        request.resource.data.guests <= 20; // Max party size
+      
+      // ✅ UPDATE/DELETE: Only by reservation creator
+      allow update, delete: if isAuthenticated() && 
+        resource.data.userId == request.auth.uid;
+    }
+    
+    // =================================================================
+    // CACHE COLLECTIONS (Server-Only)
+    // =================================================================
+    
+    match /places_nearby_cache/{any} {
+      allow read, write: if false;
+    }
+    
+    match /place_details_cache/{any} {
+      allow read, write: if false;
+    }
+    
+    match /cached_places_grid/{any} {
+      allow read, write: if false;
+    }
+    
+    match /restaurant_scores/{any} {
+      allow read, write: if false;
+    }
+    
+    // ✅ NEW: Gemini usage tracking (for monitoring)
+    match /gemini_usage/{usageId} {
+      allow read: if false;
+      allow write: if false; // Admin SDK only
+    }
+    
+    // ✅ NEW: Security events log
+    match /security_events/{eventId} {
+      allow read: if isAdmin();
+      allow write: if false; // Admin SDK only
+    }
+    
+    // =================================================================
+    // RESTAURANTS (MAIN ENTITY - CRITICAL)
+    // =================================================================
+    
+    match /restaurants/{restaurantId} {
+      // ✅ Public read
+      allow read: if true;
+      
+      // ✅ FIX: STRICT creation rules
+      allow create: if isAuthenticated() && (
+        // ✅ Prevent duplicate claims (restaurant must NOT exist yet)
+        !exists(/databases/$(database)/documents/restaurants/$(restaurantId)) &&
+        
+        // ✅ User must set themselves as owner
+        request.resource.data.ownerId == request.auth.uid &&
+        
+        // ✅ NEW: Validate required fields on creation
+        fieldExists(request.resource.data.placeId) &&
+        request.resource.data.placeId == restaurantId && // ID must match
+        
+        // ✅ NEW: claimed must be true (prevents orphaned restaurants)
+        request.resource.data.claimed == true
+      );
+      
+      // ✅ FIX: ONLY owner can update
+      allow update: if isAuthenticated() && 
+        resource.data.ownerId == request.auth.uid && (
+        
+        // ✅ NEW: Prevent ownership transfer without admin approval
+        !request.resource.data.keys().hasAny(['ownerId']) ||
+        request.resource.data.ownerId == resource.data.ownerId ||
+        isAdmin()
+      );
+      
+      // ✅ DELETE: Only owner (or admin for moderation)
+      allow delete: if (isAuthenticated() && resource.data.ownerId == request.auth.uid) || isAdmin();
+      
+      // ✅ NEW: Subcollections (menu, tables, hours)
+      match /menu/{itemId} {
+        allow read: if true; // Public menu
+        allow write: if isAuthenticated() && 
+          get(/databases/$(database)/documents/restaurants/$(restaurantId)).data.ownerId == request.auth.uid;
+      }
+      
+      match /tables/{tableId} {
+        allow read: if true; // Public (for booking UI)
+        allow write: if isAuthenticated() && 
+          get(/databases/$(database)/documents/restaurants/$(restaurantId)).data.ownerId == request.auth.uid;
+      }
+      
+      match /opening_hours/{dayId} {
+        allow read: if true;
+        allow write: if isAuthenticated() && 
+          get(/databases/$(database)/documents/restaurants/$(restaurantId)).data.ownerId == request.auth.uid;
+      }
+    }
+    
+    // =================================================================
+    // ADMIN COLLECTION (For future admin panel)
+    // =================================================================
+    
+    match /admins/{adminId} {
+      allow read: if isOwner(adminId);
+      allow write: if false; // Manual setup only
+    }
+    
+    // =================================================================
+    // WEBHOOK EVENTS (Stripe idempotency)
+    // =================================================================
+    
+    match /webhook_events/{eventId} {
+      allow read: if isAdmin();
+      allow write: if false; // Admin SDK only
     }
   }
 }

@@ -6,7 +6,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/components/auth-provider";
 import { PremiumBadge } from "@/components/ui/PremiumBadge";
 import { Button } from "@/components/ui/button";
-import { Utensils, User, Search, LogOut, Calendar, Globe } from "lucide-react";
+import { Utensils, User, Search, LogOut, Calendar, Globe, LayoutDashboard } from "lucide-react";
 import { auth } from "@/lib/firebase";
 import { signOut } from "firebase/auth";
 import toast from "react-hot-toast";
@@ -202,7 +202,7 @@ export default function AppNavbar() {
                                     <div className="p-3 border-b mb-1">
                                         <p className="font-bold text-gray-900 truncate">{user.displayName || "User"}</p>
                                         <p className="text-xs text-gray-500 truncate">{user.email}</p>
-                                        {subscriptionTier === 'premium' ? (
+                                        {['premium', 'basic', 'pro', 'enterprise'].includes(subscriptionTier) ? (
                                             <div className="mt-2">
                                                 <PremiumBadge size="sm" />
                                             </div>
@@ -216,18 +216,33 @@ export default function AppNavbar() {
                                     </div>
 
                                     <nav className="flex flex-col gap-0.5">
-                                        <Link href="/profile" onClick={() => setMobileMenuOpen(false)} className="flex items-center gap-3 p-2.5 hover:bg-gray-50 rounded-xl transition-colors">
-                                            <User className="h-4 w-4 text-gray-500" />
-                                            <span className="font-medium text-sm">Profile</span>
-                                        </Link>
-                                        <Link href="/reservations" onClick={() => setMobileMenuOpen(false)} className="flex items-center gap-3 p-2.5 hover:bg-gray-50 rounded-xl transition-colors">
-                                            <Calendar className="h-4 w-4 text-gray-500" />
-                                            <span className="font-medium text-sm">Reservations</span>
-                                        </Link>
-                                        <Link href="/subscription" onClick={() => setMobileMenuOpen(false)} className="flex items-center gap-3 p-2.5 hover:bg-gray-50 rounded-xl transition-colors">
-                                            <Utensils className="h-4 w-4 text-gray-500" />
-                                            <span className="font-medium text-sm">Membership</span>
-                                        </Link>
+                                        {userRole === 'owner' ? (
+                                            <>
+                                                <Link href="/dashboard" onClick={() => setMobileMenuOpen(false)} className="flex items-center gap-3 p-2.5 hover:bg-gray-50 rounded-xl transition-colors">
+                                                    <LayoutDashboard className="h-4 w-4 text-gray-500" />
+                                                    <span className="font-medium text-sm">Dashboard</span>
+                                                </Link>
+                                                <Link href="/profile" onClick={() => setMobileMenuOpen(false)} className="flex items-center gap-3 p-2.5 hover:bg-gray-50 rounded-xl transition-colors">
+                                                    <User className="h-4 w-4 text-gray-500" />
+                                                    <span className="font-medium text-sm">Profile</span>
+                                                </Link>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <Link href="/profile" onClick={() => setMobileMenuOpen(false)} className="flex items-center gap-3 p-2.5 hover:bg-gray-50 rounded-xl transition-colors">
+                                                    <User className="h-4 w-4 text-gray-500" />
+                                                    <span className="font-medium text-sm">Profile</span>
+                                                </Link>
+                                                <Link href="/reservations" onClick={() => setMobileMenuOpen(false)} className="flex items-center gap-3 p-2.5 hover:bg-gray-50 rounded-xl transition-colors">
+                                                    <Calendar className="h-4 w-4 text-gray-500" />
+                                                    <span className="font-medium text-sm">Reservations</span>
+                                                </Link>
+                                                <Link href="/subscription" onClick={() => setMobileMenuOpen(false)} className="flex items-center gap-3 p-2.5 hover:bg-gray-50 rounded-xl transition-colors">
+                                                    <Utensils className="h-4 w-4 text-gray-500" />
+                                                    <span className="font-medium text-sm">Membership</span>
+                                                </Link>
+                                            </>
+                                        )}
                                         <button onClick={() => { setLocale(locale === "en" ? "sk" : "en"); }} className="flex items-center gap-3 p-2.5 hover:bg-gray-50 rounded-xl w-full text-left transition-colors">
                                             <Globe className="h-4 w-4 text-gray-500" />
                                             <span className="font-medium text-sm">Language: {locale.toUpperCase()}</span>

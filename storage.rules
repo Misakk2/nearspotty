@@ -17,9 +17,21 @@ service firebase.storage {
     // --- Website Assets ---
     match /websites/{websiteId}/{allPaths=**} {
       allow read: if true;
-      // Ideally check if user is owner of websiteId in Firestore using a function
-      // For now, at least ensure they are authenticated.
-      allow write: if request.auth != null; 
+      // Secure Write: Verify ownership via Firestore document
+      allow write: if request.auth != null && 
+        firestore.get(/databases/(default)/documents/websites/$(websiteId)).data.ownerId == request.auth.uid;
+    }
+
+    // --- Restaurant Owner Images ---
+    // Images uploaded by restaurant owners (claimed restaurants only)
+    match /restaurants/{restaurantId}/owner-images/{imageId} {
+      // Public read for all restaurant images
+      allow read: if true;
+      
+      // Only the owner of the restaurant can upload/delete images
+      // Verify ownership via Firestore document
+      allow write: if request.auth != null && 
+        firestore.get(/databases/(default)/documents/restaurants/$(restaurantId)).data.ownerId == request.auth.uid;
     }
   }
 }

@@ -8,11 +8,12 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { getAdminDb } from "@/lib/firebase-admin";
-import { checkRateLimit } from "@/lib/rate-limit";
+import { getAdminDb, getAdminAuth } from "@/lib/firebase-admin";
+import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { checkUserLimit } from "@/lib/user-limits";
 import crypto from "crypto";
 import { GeminiScore } from "@/types";
+import { logGeminiUsage, calculateCost } from "@/lib/gemini"; // ✅ Updated import
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" });
@@ -36,13 +37,54 @@ interface BatchScoreResult {
 }
 
 export async function POST(request: NextRequest) {
-    try {
-        // Rate limiting
-        const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
-        const rateLimit = await checkRateLimit(`gemini_batch_${ip}`, { limit: 5, windowMs: 60 * 1000 });
+    const startTime = Date.now();
 
-        if (rateLimit.limitReached) {
-            return NextResponse.json({ error: "Too many requests. Please try again in a minute." }, { status: 429 });
+    try {
+        // --- Rate Limiting & Auth ---
+        const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+        let rateLimitIdentifier = `gemini_ip_${ip}`;
+        let rateLimitConfig = RATE_LIMITS.GEMINI.GUEST;
+
+        // Attempt to upgrade to User-based limits
+        const authHeader = request.headers.get("Authorization");
+        if (authHeader?.startsWith("Bearer ")) {
+            try {
+                const token = authHeader.split("Bearer ")[1];
+                const decodedToken = await getAdminAuth().verifyIdToken(token);
+                // Use UID for rate limiting if authenticated
+                rateLimitIdentifier = `gemini_user_${decodedToken.uid}`;
+
+                // Fetch basic user info to determine Tier
+                // Note: We avoid full user fetch here for speed if possible, but we need Tier.
+                // We'll trust the UserLimits check later for Quota, but for Rate Limit we need Tier.
+                // Let's do a quick fetch or optimistically assume Free/Premium based on claims if available?
+                // For now, let's just default to FREE for auth users, and rely on `checkUserLimit` for the hard monthly quota.
+                // Actually, `checkUserLimit` (line 64) is expensive too.
+
+                // Let's try to get the user doc to be correct about PREMIUM rate limits.
+                const userDoc = await getAdminDb().collection("users").doc(decodedToken.uid).get();
+                if (userDoc.exists) {
+                    const userData = userDoc.data();
+                    const tier = userData?.subscription?.tier || 'free';
+                    if (['premium', 'basic', 'pro', 'enterprise'].includes(tier)) {
+                        rateLimitConfig = RATE_LIMITS.GEMINI.PREMIUM;
+                    } else {
+                        rateLimitConfig = RATE_LIMITS.GEMINI.FREE;
+                    }
+                }
+            } catch (e) {
+                console.warn("[BatchScore] Auth token verification failed:", e);
+                // Fallback to Guest IP limits
+            }
+        }
+
+        const { limitReached, reset } = await checkRateLimit(rateLimitIdentifier, rateLimitConfig);
+
+        if (limitReached) {
+            return NextResponse.json({
+                error: "Too many requests. Please try again later.",
+                reset: new Date(reset).toISOString()
+            }, { status: 429 });
         }
 
         const { places, userProfile, userId } = await request.json();
@@ -138,7 +180,13 @@ Output Schema:
 `;
 
         // Timeout Handling using Promise.race (since signal might not be supported)
-        const GEMINI_TIMEOUT_MS = 25000;
+        const GEMINI_TIMEOUT_MS = 60000;
+
+        let timeoutId: NodeJS.Timeout | null = null;
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const timeoutPromise = new Promise<never>((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error("GEMINI_TIMEOUT")), GEMINI_TIMEOUT_MS);
+        });
 
         try {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -146,16 +194,30 @@ Output Schema:
                 model.generateContent({
                     contents: [{ role: "user", parts: [{ text: prompt }] }],
                 }),
-                new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error("GEMINI_TIMEOUT")), GEMINI_TIMEOUT_MS)
-                )
+                timeoutPromise
             ]);
 
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const result = await racePromise as any;
+            if (timeoutId) clearTimeout(timeoutId); // ✅ Clear timeout on success
 
             const response = await result.response;
             const text = response.text();
+
+            // ✅ Track Usage
+            const metadata = await response.usageMetadata;
+            if (metadata) {
+                await logGeminiUsage({
+                    operation: 'batch-lite',
+                    tokensUsed: metadata.totalTokenCount || 0,
+                    candidateCount: uncachedPlaces.length,
+                    userId: userId || 'anonymous',
+                    success: true,
+                    latencyMs: Date.now() - startTime,
+                    cost: calculateCost(metadata.totalTokenCount || 0),
+                    timestamp: new Date()
+                });
+            }
 
             // Parse response
             const jsonStr = text.replace(/```json\n?|\n?```/g, "").trim();
@@ -166,6 +228,19 @@ Output Schema:
                 scores = JSON.parse(jsonStr);
             } catch {
                 console.error("[BatchScore] Failed to parse:", text);
+
+                // Log failure
+                await logGeminiUsage({
+                    operation: 'batch-lite',
+                    tokensUsed: 0,
+                    candidateCount: uncachedPlaces.length,
+                    userId: userId || 'anonymous',
+                    success: false,
+                    latencyMs: Date.now() - startTime,
+                    cost: 0,
+                    timestamp: new Date()
+                });
+
                 return NextResponse.json({ error: "AI response parsing failed" }, { status: 500 });
             }
 
@@ -213,8 +288,21 @@ Output Schema:
             });
 
         } catch (error) {
-            // clearTimeout(timeoutId); // Removed
+            if (timeoutId) clearTimeout(timeoutId);
             console.error("[BatchScore] API Error:", error);
+
+            // Log error usage
+            await logGeminiUsage({
+                operation: 'batch-lite',
+                tokensUsed: 0,
+                candidateCount: uncachedPlaces.length,
+                userId: userId || 'anonymous',
+                success: false,
+                latencyMs: Date.now() - startTime,
+                cost: 0,
+                timestamp: new Date()
+            });
+
             // Check for timeout error string
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             if ((error as any).message === "GEMINI_TIMEOUT") {

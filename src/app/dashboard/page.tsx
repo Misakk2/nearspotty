@@ -19,14 +19,18 @@ import {
     AlertCircle,
     Loader2,
     Sparkles,
-    ArrowRight
+    ArrowRight,
+    Check,
+    X
 } from "lucide-react";
-import { doc, getDoc, updateDoc, collection, query, getDocs, orderBy, Timestamp } from "firebase/firestore";
+import { doc, getDoc, updateDoc, collection, query, getDocs, orderBy, Timestamp, where } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { motion } from "framer-motion";
 import toast from "react-hot-toast";
 import { BusinessPlan, BUSINESS_LIMITS, PLAN_TO_PRICE } from "@/lib/plan-limits";
 import PricingSettings from "@/components/dashboard/PricingSettings";
+import { MenuEditor } from "@/components/dashboard/MenuEditor";
+import { TableManager } from "@/components/dashboard/TableManager";
 
 interface Reservation {
     id: string;
@@ -36,7 +40,8 @@ interface Reservation {
     date: Timestamp;
     guests: number;
     time: string;
-    status: 'pending' | 'confirmed' | 'cancelled';
+    placeId: string;
+    status: 'pending' | 'confirmed' | 'cancelled' | 'rejected';
 }
 
 export default function BusinessDashboard() {
@@ -49,8 +54,9 @@ export default function BusinessDashboard() {
         pending: 0,
         confirmed: 0
     });
-    const [activeTab, setActiveTab] = useState<'overview' | 'pricing' | 'subscription' | 'settings'>('overview');
+    const [activeTab, setActiveTab] = useState<'overview' | 'menu' | 'tables' | 'pricing' | 'subscription' | 'settings'>('overview');
     const [restaurantData, setRestaurantData] = useState({
+        placeId: "",
         name: "",
         address: "",
         avgCheck: 45,
@@ -101,14 +107,35 @@ export default function BusinessDashboard() {
             if (myDoc.exists()) {
                 const userData = myDoc.data();
 
-                // Set plan info
-                setUserPlan((userData.plan as BusinessPlan) || "free");
-                setStripeCustomerId(userData.stripeCustomerId || null);
+                // Set plan info - PRIORITIZE SUBSCRIPTION OBJECT
+                const subscription = userData.subscription || {};
+                const activeStatus = ['active', 'trialing'].includes(subscription.status);
+                const rawTier = activeStatus ? subscription.tier : 'free';
+
+                let tier: BusinessPlan = 'free';
+
+                // Handle legacy fallback if tier is missing or 'premium' (diner tier shows as free in business dashboard)
+                if (!rawTier || rawTier === 'premium') {
+                    // Try legacy field, but be careful of 'premium' which is diner
+                    const legacyPlan = userData.plan;
+                    if (legacyPlan && legacyPlan !== 'premium') {
+                        tier = legacyPlan as BusinessPlan;
+                    } else {
+                        tier = 'free';
+                    }
+                } else {
+                    // It's a valid business tier (basic, pro, enterprise)
+                    tier = rawTier as BusinessPlan;
+                }
+
+                setUserPlan(tier);
+                setStripeCustomerId(userData.stripeCustomerId || subscription.stripeCustomerId || null);
 
                 if (userData.business) {
                     const b = userData.business;
                     setRestaurantData(prev => ({
                         ...prev,
+                        placeId: b.placeId,
                         name: b.name || prev.name,
                         address: b.address || prev.address,
                         avgCheck: b.avgCheck || prev.avgCheck,
@@ -121,8 +148,23 @@ export default function BusinessDashboard() {
 
         const fetchReservations = async () => {
             try {
+                const myDoc = await getDoc(doc(db, "users", user.uid));
+                if (!myDoc.exists()) return;
+
+                const userData = myDoc.data();
+                const businessPlaceId = userData.business?.placeId;
+
+                if (!businessPlaceId) {
+                    console.warn("No business placeId found for user. Redirecting to onboarding.");
+                    window.location.href = "/business-onboarding";
+                    return;
+                }
+
+                // Query reservations for this restaurant
+                // Note: Requires a composite index on [placeId, date]
                 const q = query(
                     collection(db, "reservations"),
+                    where("placeId", "==", businessPlaceId),
                     orderBy("date", "desc")
                 );
 
@@ -140,7 +182,14 @@ export default function BusinessDashboard() {
                 });
             } catch (error) {
                 console.error("Error fetching reservations:", error);
-                toast.error("Failed to load dashboard data");
+
+                // Friendly error specifically for index requirement
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                if ((error as any).code === 'failed-precondition') {
+                    toast.error("Missing index. Check console for link.");
+                } else {
+                    toast.error("Failed to load dashboard data");
+                }
             } finally {
                 setLoading(false);
             }
@@ -149,6 +198,43 @@ export default function BusinessDashboard() {
         fetchBusinessData();
         fetchReservations();
     }, [user]);
+
+    const handleStatusUpdate = async (reservationId: string, newStatus: 'confirmed' | 'rejected') => {
+        if (!user) return;
+
+        // Optimistic update
+        setReservations(prev => prev.map(r =>
+            r.id === reservationId ? { ...r, status: newStatus } : r
+        ));
+        setStats(prev => ({
+            ...prev,
+            pending: prev.pending - 1,
+            confirmed: newStatus === 'confirmed' ? prev.confirmed + 1 : prev.confirmed
+        }));
+
+        try {
+            const token = await user.getIdToken();
+            const res = await fetch("/api/reservations/update-status", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${token}`
+                },
+                body: JSON.stringify({ reservationId, status: newStatus })
+            });
+
+            if (!res.ok) {
+                const data = await res.json();
+                toast.error(data.error || "Failed to update status");
+                // Revert on error (could be improved by refetching)
+            } else {
+                toast.success(`Reservation ${newStatus}`);
+            }
+        } catch (error) {
+            console.error("Status update error:", error);
+            toast.error("Failed to call API");
+        }
+    };
 
     const handleUpdateSettings = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -198,13 +284,15 @@ export default function BusinessDashboard() {
                         <div className="flex gap-2 p-1 bg-gray-100 rounded-2xl w-fit overflow-x-auto">
                             {[
                                 { id: 'overview', label: 'Overview', icon: Users },
+                                { id: 'menu', label: 'Menu', icon: Sparkles },
+                                { id: 'tables', label: 'Tables', icon: Users },
                                 { id: 'pricing', label: 'AI Pricing', icon: Sparkles },
                                 { id: 'subscription', label: 'Subscription', icon: CreditCard },
                                 { id: 'settings', label: 'Settings', icon: Calendar }
                             ].map(tab => (
                                 <button
                                     key={tab.id}
-                                    onClick={() => setActiveTab(tab.id as 'overview' | 'pricing' | 'subscription' | 'settings')}
+                                    onClick={() => setActiveTab(tab.id as 'overview' | 'menu' | 'tables' | 'pricing' | 'subscription' | 'settings')}
                                     className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-bold text-sm transition-all whitespace-nowrap ${activeTab === tab.id ? 'bg-white text-primary shadow-sm' : 'text-gray-500 hover:text-gray-900'}`}
                                 >
                                     <tab.icon className="h-4 w-4" />
@@ -212,6 +300,32 @@ export default function BusinessDashboard() {
                                 </button>
                             ))}
                         </div>
+
+                        {activeTab === 'menu' && restaurantData.placeId && (
+                            <motion.section initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
+                                <MenuEditor placeId={restaurantData.placeId} />
+                            </motion.section>
+                        )}
+
+                        {activeTab === 'menu' && !restaurantData.placeId && (
+                            <div className="text-center py-10">
+                                <Loader2 className="h-8 w-8 animate-spin mx-auto text-muted-foreground" />
+                                <p className="text-muted-foreground mt-2">Loading restaurant data...</p>
+                            </div>
+                        )}
+
+                        {activeTab === 'tables' && restaurantData.placeId && (
+                            <motion.section initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
+                                <TableManager placeId={restaurantData.placeId} />
+                            </motion.section>
+                        )}
+
+                        {activeTab === 'tables' && !restaurantData.placeId && (
+                            <div className="text-center py-10">
+                                <Loader2 className="h-8 w-8 animate-spin mx-auto text-muted-foreground" />
+                                <p className="text-muted-foreground mt-2">Loading restaurant data...</p>
+                            </div>
+                        )}
 
                         {activeTab === 'pricing' && (
                             <motion.section initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
@@ -266,7 +380,6 @@ export default function BusinessDashboard() {
                                                         : BUSINESS_LIMITS[userPlan].reservationsPerMonth} reservations/month</li>
                                                     <li>• €{BUSINESS_LIMITS[userPlan].perCoverFee.toFixed(2)} per-cover fee</li>
                                                     <li>• {BUSINESS_LIMITS[userPlan].aiInsights ? "✓" : "✗"} AI menu insights</li>
-                                                    <li>• {BUSINESS_LIMITS[userPlan].priorityListing ? "✓" : "✗"} Priority listing</li>
                                                     <li>• {BUSINESS_LIMITS[userPlan].smsNotifications ? "✓" : "✗"} SMS notifications</li>
                                                 </ul>
                                             </div>
@@ -501,6 +614,7 @@ export default function BusinessDashboard() {
                                                                 <th className="px-6 py-3 font-semibold text-center">Party</th>
                                                                 <th className="px-6 py-3 font-semibold">Contact</th>
                                                                 <th className="px-6 py-3 font-semibold">Status</th>
+                                                                <th className="px-6 py-3 font-semibold text-right">Actions</th>
                                                             </tr>
                                                         </thead>
                                                         <tbody className="divide-y">
@@ -528,6 +642,28 @@ export default function BusinessDashboard() {
                                                                         }>
                                                                             {res.status}
                                                                         </Badge>
+                                                                    </td>
+                                                                    <td className="px-6 py-4 text-right">
+                                                                        {res.status === 'pending' && (
+                                                                            <div className="flex justify-end gap-2">
+                                                                                <Button
+                                                                                    size="sm"
+                                                                                    variant="outline"
+                                                                                    className="h-8 w-8 p-0 text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
+                                                                                    onClick={() => handleStatusUpdate(res.id, 'rejected')}
+                                                                                >
+                                                                                    <X className="h-4 w-4" />
+                                                                                </Button>
+                                                                                <Button
+                                                                                    size="sm"
+                                                                                    variant="outline"
+                                                                                    className="h-8 w-8 p-0 text-green-600 hover:text-green-700 hover:bg-green-50 border-green-200"
+                                                                                    onClick={() => handleStatusUpdate(res.id, 'confirmed')}
+                                                                                >
+                                                                                    <Check className="h-4 w-4" />
+                                                                                </Button>
+                                                                            </div>
+                                                                        )}
                                                                     </td>
                                                                 </tr>
                                                             ))}

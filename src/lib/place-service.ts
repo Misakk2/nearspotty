@@ -5,6 +5,78 @@ const GOOGLE_PLACES_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY;
 
 export async function getPlaceDetails(placeId: string): Promise<Place | null> {
     if (!placeId) throw new Error("Missing place_id");
+
+    // 0. Claim Priority Check (Strict)
+    // We check Firestore first. If claimed, we serve that data and SKIP Google API.
+    try {
+        const { getAdminDb } = await import("@/lib/firebase-admin"); // Dynamic import to avoid build triggers if not used on client (though this is server code)
+        const doc = await getAdminDb().collection("restaurants").doc(placeId).get();
+
+        if (doc.exists) {
+            const data = doc.data();
+            // If claimed, return internal data as Place
+            if (data?.isClaimed) {
+                // console.log(`[PlaceService] 🟢 Served from Strict Claim: ${placeId}`);
+
+                // Map Firestore Restaurant -> Place
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const photos = (data.images?.owner || []).map((img: any) => ({
+                    height: 0,
+                    width: 0,
+                    name: "owner_upload",
+                    photo_reference: "owner_upload",
+                    proxyPhotoUrl: img.url,
+                    url: img.url
+                }));
+
+                // Fallback to Google photos if owner hasn't uploaded any
+                if (photos.length === 0 && data.images?.google) {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    data.images.google.forEach((img: any) => {
+                        photos.push({
+                            height: img.height,
+                            width: img.width,
+                            name: img.photoReference,
+                            photo_reference: img.photoReference,
+                            proxyPhotoUrl: img.cachedUrl || `/api/images/proxy?id=${placeId}&ref=${img.photoReference}`
+                        });
+                    });
+                }
+
+                return {
+                    place_id: placeId,
+                    name: data.details.name,
+                    formatted_address: data.details.address,
+                    formatted_phone_number: data.details.phoneNumber,
+                    website: data.details.website,
+                    rating: data.details.rating,
+                    user_ratings_total: data.details.userRatingCount,
+                    price_level: data.details.priceLevel,
+                    types: data.details.types || [],
+                    geometry: data.details.geometry,
+                    opening_hours: {
+                        open_now: false, // Calc logic needed if strictly offline, or use data.details.openingHours
+                        weekday_text: data.details.openingHours?.weekdayDescriptions || []
+                    },
+                    reviews: data.details.reviews || [], // Use cached reviews
+                    photos: photos,
+                    proxyPhotoUrl: photos.length > 0 ? photos[0].proxyPhotoUrl : undefined,
+                    imageSrc: photos.length > 0 ? photos[0].proxyPhotoUrl : "",
+                    description: data.details.editorialSummary || data.details.description,
+
+                    // Managed Fields
+                    isClaimed: true,
+                    menu: data.menu,
+                    tableConfig: data.tableConfig,
+                    customPhotos: data.images?.owner
+                } as Place;
+            }
+        }
+    } catch (err) {
+        console.error("[PlaceService] Firestore check failed:", err);
+        // Continue to Google fallback
+    }
+
     if (!GOOGLE_PLACES_API_KEY) throw new Error("Server Configuration Error: Missing Map Key");
 
     // 1. Cache Check

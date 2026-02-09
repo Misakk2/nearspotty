@@ -1,6 +1,6 @@
 "use client";
 import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { useAuth } from "@/components/auth-provider";
 import { Loader2 } from "lucide-react";
 
@@ -10,29 +10,58 @@ interface RoleGuardProps {
 }
 
 export default function RoleGuard({ children, allowedRole }: RoleGuardProps) {
-    const { user, userRole, loading } = useAuth();
+    const { user, userRole, loading, completedOnboarding } = useAuth();
     const router = useRouter();
-
-    const pathname = window.location.pathname;
+    const pathname = usePathname();
 
     useEffect(() => {
         if (!loading && user) {
-            console.log(`[RoleGuard] Checking access. Role: ${userRole}, Allowed: ${allowedRole}, Path: ${pathname}`);
+            console.log(`[RoleGuard] Checking access. Role: ${userRole}, Allowed: ${allowedRole}, Path: ${pathname}, Onboarded: ${completedOnboarding}`);
+
+            // 1. Handle "No Role" Users -> Force Onboarding
             if (userRole === "no_role") {
-                if (pathname !== "/onboarding") {
-                    console.log("[RoleGuard] Redirecting to /onboarding");
+                const allowedPaths = ["/onboarding", "/business-onboarding"];
+                if (!allowedPaths.some(p => pathname.startsWith(p))) {
+                    console.log("[RoleGuard] No role -> Redirecting to /onboarding");
                     router.push("/onboarding");
                 }
-            } else if (userRole && userRole !== "error" && userRole !== allowedRole) {
-                const target = userRole === "owner" ? "/dashboard" : "/search";
-                if (pathname !== target) {
-                    console.log(`[RoleGuard] Redirecting to ${target}`);
-                    // Redirect to their actual home
-                    router.push(target);
+                return;
+            }
+
+            // 2. Handle "Diner" Logic
+            if (userRole === "diner") {
+                // If aiming for Diner connection but hasn't completed onboarding -> Force Onboarding
+                if (!completedOnboarding && !pathname.startsWith("/onboarding")) {
+                    console.log("[RoleGuard] Diner not onboarded -> Redirecting to /onboarding");
+                    router.push("/onboarding");
+                    return;
+                }
+
+                // If aiming for Owner routes -> Redirect to Search
+                if (allowedRole === "owner") {
+                    console.log("[RoleGuard] Diner accessing Owner route -> Redirecting to /search");
+                    router.push("/search");
+                    return;
                 }
             }
+
+            // 3. Handle "Owner" Logic
+            if (userRole === "owner") {
+                // If aiming for Diner routes -> Redirect to Dashboard
+                if (allowedRole === "diner") {
+                    console.log("[RoleGuard] Owner accessing Diner route -> Redirecting to /dashboard");
+                    router.push("/dashboard");
+                    return;
+                }
+            }
+
+            // 4. Handle "Error" Role
+            if (userRole === "error") {
+                console.error("[RoleGuard] User role error.");
+                // Optionally redirect to an error page or stay put
+            }
         }
-    }, [user, userRole, loading, allowedRole, router, pathname]);
+    }, [user, userRole, loading, allowedRole, router, pathname, completedOnboarding]);
 
     if (loading || (user && !userRole)) {
         return (
@@ -43,16 +72,19 @@ export default function RoleGuard({ children, allowedRole }: RoleGuardProps) {
         );
     }
 
-    // If role doesn't match or is no_role, we return null while redirecting
-    // Also treat "user" as "diner" for this check
-    const effectiveRole = userRole === "user" ? "diner" : userRole;
-    if (user && (userRole === "no_role" || (effectiveRole !== allowedRole && userRole !== "error"))) {
-        return (
-            <div className="flex flex-col items-center justify-center min-h-screen gap-4">
-                <Loader2 className="h-8 w-8 animate-spin text-primary" />
-                <p className="text-sm text-muted-foreground">Redirecting to your workspace...</p>
-            </div>
-        );
+    // Block render if we are about to redirect
+    if (user) {
+        if (userRole === "no_role" ||
+            (userRole === "diner" && !completedOnboarding && !pathname.startsWith("/onboarding")) ||
+            (userRole === "diner" && allowedRole === "owner") ||
+            (userRole === "owner" && allowedRole === "diner")) {
+            return (
+                <div className="flex flex-col items-center justify-center min-h-screen gap-4">
+                    <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                    <p className="text-sm text-muted-foreground">Redirecting...</p>
+                </div>
+            );
+        }
     }
 
     return <>{children}</>;

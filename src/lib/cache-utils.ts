@@ -10,14 +10,15 @@ interface CacheEntry<T = unknown> {
  * Gets a cached value from Firestore if it exists and is not expired.
  */
 // Fallback App ID if not in env
-const APP_ID = process.env.NEXT_PUBLIC_FIREBASE_APP_ID || process.env.NEXT_PUBLIC_APP_ID || "nearspotty_default";
 
 function getCacheCollectionRef(collectionName: string) {
-    // Enforce the mandatory path: /artifacts/${appId}/public/data/${collectionName}
-    // Structure: artifacts(col) -> appId(doc) -> public(col) -> data(doc) -> collectionName(col)
-    return getAdminDb().collection('artifacts').doc(APP_ID)
-        .collection('public').doc('data')
-        .collection(collectionName);
+    // Unified Cache Paths (v2)
+    // We strictly map to root collections to avoid "artifacts" nesting complexity for high-frequency cache
+    if (collectionName.includes("grid")) return getAdminDb().collection("cache_places_grid_v2");
+    if (collectionName.includes("city")) return getAdminDb().collection("cache_places_city_v2");
+
+    // Fallback for other collections (or legacy)
+    return getAdminDb().collection(collectionName);
 }
 
 /**

@@ -1,6 +1,7 @@
 import { Place } from "@/types/place";
 import { Star, MapPin, Lock, Clock, AlertTriangle, Navigation, Globe, X } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
@@ -35,7 +36,7 @@ export default function PlaceCard({
     score,
     scoringLoading = false,
     limitReached = false,
-    isMobile,
+    // isMobile prop removed - using Tailwind responsive classes instead
     userLocation,
     isSurvivalOption = false,
     survivalReason
@@ -43,6 +44,7 @@ export default function PlaceCard({
     const [isExpanded, setIsExpanded] = useState(false);
     const cardRef = useRef<HTMLDivElement>(null);
     const setPlace = usePlaceStore((state) => state.setPlace);
+    const router = useRouter();
 
     // Check if we have a valid photo URL (not a placeholder)
     const validPhotoUrl = place.proxyPhotoUrl || place.imageSrc;
@@ -75,6 +77,12 @@ export default function PlaceCard({
     }, [isExpanded]);
 
     const handleCardClick = (e: React.MouseEvent) => {
+        // Ignore clicks from action buttons (Navigate, View Details, etc.)
+        const target = e.target as HTMLElement;
+        if (target.closest('a, button[data-action], [data-action]')) {
+            return;
+        }
+
         if (!isExpanded) {
             e.preventDefault();
             setIsExpanded(true);
@@ -82,6 +90,7 @@ export default function PlaceCard({
         } else {
             setPlace(place);
             onBeforeNavigate?.();
+            router.push(`/place/${place.place_id}`);
         }
     };
 
@@ -103,10 +112,11 @@ export default function PlaceCard({
         : null;
 
     const cardContent = (
-        <Card className={`hover:shadow-md transition-all cursor-pointer overflow-hidden border-none shadow-sm bg-card group ${isMobile ? 'flex flex-row h-32' : 'flex flex-col'} ${isExpanded ? 'ring-2 ring-primary shadow-lg' : ''}`}>
-            <div className="flex flex-row md:flex-col h-32 md:h-auto">
-                {/* Image */}
-                <div className={`w-32 md:w-full h-full md:h-40 shrink-0 bg-gray-200 relative ${isMobile ? 'w-32 h-32' : ''}`}>
+        <Card className={`hover:shadow-md transition-all cursor-pointer overflow-hidden border-none shadow-sm bg-card group flex flex-col ${isExpanded ? 'ring-2 ring-primary shadow-lg' : ''}`}>
+            {/* MOBILE: Vertical stack (flex-col) | DESKTOP: Horizontal (md:flex-row) */}
+            <div className="flex flex-col">
+                {/* Image - Full width on mobile, fixed width on desktop */}
+                <div className="w-full h-44 md:h-32 shrink-0 bg-gray-200 relative">
                     {hasValidPhoto ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img src={validPhotoUrl!} alt={place.name} className="w-full h-full object-cover" loading="lazy" />
@@ -230,21 +240,85 @@ export default function PlaceCard({
                         )}
                     </div>
 
-                    {/* Quick Actions (expanded) */}
+                    {/* MOBILE: Always Visible Action Buttons (no tap required) */}
+                    <div className="flex gap-2 mt-3 pt-3 border-t border-gray-100 md:hidden">
+                        {googleMapsUrl && (
+                            <Button
+                                size="sm"
+                                variant="outline"
+                                className="flex-1 h-9 text-xs"
+                                data-action="navigate"
+                                onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    window.open(googleMapsUrl, '_blank');
+                                }}
+                            >
+                                <Navigation className="h-3.5 w-3.5 mr-1" /> Navigate
+                            </Button>
+                        )}
+                        <Link
+                            href={`/place/${place.place_id}`}
+                            className="flex-1"
+                            data-action="view-details"
+                            prefetch={false}
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                setPlace(place);
+                                onBeforeNavigate?.();
+                            }}
+                        >
+                            <Button size="sm" className="w-full h-9 text-xs bg-primary">
+                                View Details
+                            </Button>
+                        </Link>
+                    </div>
+
+                    {/* DESKTOP: Quick Actions (expanded only) */}
                     {isExpanded && (
-                        <div className="flex gap-2 mt-3 pt-3 border-t border-gray-100">
+                        <div className="hidden md:flex gap-2 mt-3 pt-3 border-t border-gray-100">
                             {googleMapsUrl && (
-                                <Button size="sm" variant="outline" className="flex-1 h-8 text-xs" onClick={(e) => { e.preventDefault(); e.stopPropagation(); window.open(googleMapsUrl, '_blank'); }}>
+                                <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="flex-1 h-8 text-xs"
+                                    data-action="navigate"
+                                    onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        window.open(googleMapsUrl, '_blank');
+                                    }}
+                                >
                                     <Navigation className="h-3 w-3 mr-1" /> Navigate
                                 </Button>
                             )}
                             {place.website && (
-                                <Button size="sm" variant="outline" className="flex-1 h-8 text-xs" onClick={(e) => { e.preventDefault(); e.stopPropagation(); window.open(place.website, '_blank'); }}>
+                                <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="flex-1 h-8 text-xs"
+                                    data-action="website"
+                                    onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        window.open(place.website, '_blank');
+                                    }}
+                                >
                                     <Globe className="h-3 w-3 mr-1" /> Website
                                 </Button>
                             )}
-                            <Link href={`/place/${place.place_id}`} className="flex-1" onClick={(e) => e.stopPropagation()}>
-                                <Button size="sm" className="w-full h-8 text-xs bg-primary" onClick={() => { setPlace(place); onBeforeNavigate?.(); }}>
+                            <Link
+                                href={`/place/${place.place_id}`}
+                                className="flex-1"
+                                data-action="view-details"
+                                prefetch={false}
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    setPlace(place);
+                                    onBeforeNavigate?.();
+                                }}
+                            >
+                                <Button size="sm" className="w-full h-8 text-xs bg-primary">
                                     View Details
                                 </Button>
                             </Link>
@@ -311,14 +385,20 @@ export default function PlaceCard({
     );
 
     return (
-        <div ref={cardRef} className="relative">
-            {isExpanded ? (
-                <div onClick={handleCardClick}>{cardContent}</div>
-            ) : (
-                <Link href={`/place/${place.place_id}`} className="block" onClick={handleCardClick}>
-                    {cardContent}
-                </Link>
-            )}
+        <div
+            ref={cardRef}
+            className="relative cursor-pointer"
+            onClick={handleCardClick}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    handleCardClick(e as unknown as React.MouseEvent);
+                }
+            }}
+        >
+            {cardContent}
         </div>
     );
 }

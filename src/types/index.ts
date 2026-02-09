@@ -31,7 +31,7 @@ export interface UserProfile {
  */
 export interface UserSubscription {
     status: 'active' | 'trialing' | 'past_due' | 'canceled' | 'expired';
-    tier: 'free' | 'premium';
+    tier: 'free' | 'premium' | 'basic' | 'pro' | 'enterprise';
     plan: string;
     stripeSubscriptionId?: string;
     stripeCustomerId?: string;
@@ -59,10 +59,10 @@ export interface User {
     uid: string;
     email: string;
     displayName?: string;
-    role: 'diner' | 'restaurant_owner';
+    role: 'diner' | 'owner';
 
-    // Single source of truth for tier
-    tier: 'free' | 'premium';
+    // Single source of truth for tier (Migration: Prefer subscription.tier)
+    tier: 'free' | 'premium' | 'basic' | 'pro' | 'enterprise';
 
     subscription: UserSubscription;
     credits: UserCredits;
@@ -146,6 +146,26 @@ export interface Restaurant {
     claimed: boolean;
     claimedBy?: string;      // User UID of claimer
     claimedAt?: string;      // ISO timestamp
+
+    // Managed Content (Claimed features)
+    menu?: {
+        items: {
+            id: string;
+            name: string;
+            description?: string;
+            price: number;
+            weight?: string;
+            imageUrl?: string;
+            allergens?: string[];
+            dietary?: string[];
+            category: string;
+        }[];
+    };
+    tableConfig?: {
+        totalTables: number;
+        seatsPerTable: number;
+        bookableTables?: number;
+    };
 
     // Cache Metadata for staleness detection
     cacheMetadata: {

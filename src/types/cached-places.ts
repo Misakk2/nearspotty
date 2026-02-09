@@ -66,11 +66,36 @@ export interface PlacesCacheEntry {
  * Creates a grid key for caching based on coordinates and radius.
  * Rounds coordinates to ~100m precision for efficient cache hits.
  */
-export function createGridKey(lat: number, lng: number, radius: number): string {
-    // Round to 2 decimal places (~1.1km precision at equator)
-    const roundedLat = Math.round(lat * 100) / 100;
-    const roundedLng = Math.round(lng * 100) / 100;
-    return `${roundedLat}_${roundedLng}_${radius}`;
+/**
+ * Creates a grid key for caching based on coordinates and radius.
+ * Uses ~5km granularity (0.05 degrees) to group nearby searches.
+ */
+export function createGridKey(lat: number, lng: number): string {
+    const GRID_SIZE = 0.05; // Approx 5.5km
+    const roundedLat = Math.floor(lat / GRID_SIZE) * GRID_SIZE;
+    const roundedLng = Math.floor(lng / GRID_SIZE) * GRID_SIZE;
+
+    // Format to 2 decimal places to avoid floating point issues
+    return `${roundedLat.toFixed(2)}_${roundedLng.toFixed(2)}`;
+}
+
+/**
+ * Returns grid keys for the current location and all surrounding grids.
+ * Used to check for existing cache coverage including overlaps.
+ */
+export function getNearbyGridKeys(lat: number, lng: number): string[] {
+    const GRID_SIZE = 0.05;
+    const keys: string[] = [];
+
+    // Check center and 8 surrounding grids
+    for (let x = -1; x <= 1; x++) {
+        for (let y = -1; y <= 1; y++) {
+            const neighborLat = lat + (x * GRID_SIZE);
+            const neighborLng = lng + (y * GRID_SIZE);
+            keys.push(createGridKey(neighborLat, neighborLng));
+        }
+    }
+    return [...new Set(keys)]; // Dedup
 }
 
 /**

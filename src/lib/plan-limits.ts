@@ -16,6 +16,11 @@ export const STRIPE_PRICES = {
     business_enterprise: 'price_1SuvxMEOZfDm5I74I28E8OtJ', // €199/month
 } as const;
 
+// Global Configuration
+export const PLAN_CONFIG = {
+    TRIAL_DAYS: 14, // 14-day free trial for all paid plans
+} as const;
+
 // Plan names to price ID mapping
 export const PLAN_TO_PRICE: Record<string, string> = {
     premium: STRIPE_PRICES.diner_premium,
@@ -44,7 +49,6 @@ export const BUSINESS_LIMITS = {
         reservationsPerMonth: 10,
         perCoverFee: 2.00,
         aiInsights: false,
-        priorityListing: false,
         smsNotifications: false,
         multiLocation: false,
         apiAccess: false,
@@ -53,7 +57,6 @@ export const BUSINESS_LIMITS = {
         reservationsPerMonth: 50,
         perCoverFee: 1.50,
         aiInsights: false,
-        priorityListing: false,
         smsNotifications: false,
         multiLocation: false,
         apiAccess: false,
@@ -62,7 +65,6 @@ export const BUSINESS_LIMITS = {
         reservationsPerMonth: Infinity,
         perCoverFee: 1.00,
         aiInsights: true,
-        priorityListing: true,
         smsNotifications: true,
         multiLocation: false,
         apiAccess: false,
@@ -71,7 +73,6 @@ export const BUSINESS_LIMITS = {
         reservationsPerMonth: Infinity,
         perCoverFee: 0.50,
         aiInsights: true,
-        priorityListing: true,
         smsNotifications: true,
         multiLocation: true,
         apiAccess: true,
@@ -111,4 +112,26 @@ export function getRemainingReservations(plan: BusinessPlan, currentUsage: numbe
     const limits = getBusinessLimits(plan);
     if (limits.reservationsPerMonth === Infinity) return Infinity;
     return Math.max(0, limits.reservationsPerMonth - currentUsage);
+}
+
+/**
+ * Helper to determine Role and Tier from Price ID
+ * Centralized logic for Webhooks and Sync
+ */
+export function getTierFromPriceId(priceId: string): { role: 'diner' | 'owner', tier: 'free' | 'premium' | 'basic' | 'pro' | 'enterprise' } {
+    if (priceId === STRIPE_PRICES.diner_premium) {
+        return { role: 'diner', tier: 'premium' };
+    }
+    if (priceId === STRIPE_PRICES.business_basic) {
+        return { role: 'owner', tier: 'basic' };
+    }
+    if (priceId === STRIPE_PRICES.business_pro) {
+        return { role: 'owner', tier: 'pro' };
+    }
+    if (priceId === STRIPE_PRICES.business_enterprise) {
+        return { role: 'owner', tier: 'enterprise' };
+    }
+
+    // Default safe fallback
+    return { role: 'diner', tier: 'free' };
 }

@@ -11,9 +11,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAdminDb } from "@/lib/firebase-admin";
 import { createGridKey, placeToCache, cacheToPlace, CachedPlace, PlacesCacheEntry } from "@/types/cached-places";
 import { Place } from "@/types/place";
-
-// Cache TTL: 24 hours
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+import { getCache, setCache } from "@/lib/cache-utils";
+import { CACHE_DURATIONS } from "@/lib/cache-config";
 
 export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
@@ -32,47 +31,79 @@ export async function GET(request: NextRequest) {
     }
 
     // Create grid key for caching
-    const gridKey = createGridKey(lat, lng, radius);
+    // Note: Radius is no longer part of the key to increase hit rate (coarse grid)
+    const gridKey = createGridKey(lat, lng);
     const now = Date.now();
 
     try {
-        // Check Firestore cache first
-        const cacheRef = getAdminDb().collection("cached_places_grid").doc(gridKey);
-        const cacheDoc = await cacheRef.get();
+        // Check Unified Cache
+        const cacheData = await getCache<PlacesCacheEntry>("places_grid_cache", gridKey);
 
-        if (cacheDoc.exists) {
-            const cacheData = cacheDoc.data() as PlacesCacheEntry;
+        if (cacheData) {
+            console.log(`[Discover] Cache HIT for grid ${gridKey}`);
 
-            // Check if cache is still valid
-            if (cacheData.expires_at > now) {
-                console.log(`[Discover] Cache HIT for grid ${gridKey}`);
+            // Convert cached places back to Place format
+            const places = cacheData.places.map(cacheToPlace);
 
-                // Convert cached places back to Place format
-                const places = cacheData.places.map(cacheToPlace);
+            // Apply keyword filter if provided
+            const filteredPlaces = keyword
+                ? places.filter(p =>
+                    p.name.toLowerCase().includes(keyword.toLowerCase()) ||
+                    p.types.some(t => t.toLowerCase().includes(keyword.toLowerCase()))
+                )
+                : places;
 
-                // Apply keyword filter if provided
-                const filteredPlaces = keyword
-                    ? places.filter(p =>
-                        p.name.toLowerCase().includes(keyword.toLowerCase()) ||
-                        p.types.some(t => t.toLowerCase().includes(keyword.toLowerCase()))
-                    )
-                    : places;
+            // --------------------------------------------------------------------------
+            // OVERRIDE LOGIC: Fetch claimed restaurant data and merge
+            // --------------------------------------------------------------------------
+            const finalResults = [...filteredPlaces];
 
-                return NextResponse.json({
-                    results: filteredPlaces,
-                    cache: {
-                        hit: true,
-                        grid_key: gridKey,
-                        cached_at: cacheData.cached_at,
-                        expires_at: cacheData.expires_at,
-                    }
-                });
-            } else {
-                console.log(`[Discover] Cache EXPIRED for grid ${gridKey}`);
+            if (finalResults.length > 0) {
+                try {
+                    const placeIds = finalResults.map(p => p.place_id);
+                    const db = getAdminDb();
+
+                    const claimedDocs = await Promise.all(
+                        placeIds.map(id => db.collection("restaurants").doc(id).get())
+                    );
+
+                    claimedDocs.forEach(doc => {
+                        if (doc.exists) {
+                            const data = doc.data();
+                            if (data?.isClaimed) {
+                                const index = finalResults.findIndex(p => p.place_id === doc.id);
+                                if (index !== -1) {
+                                    // Merge logic
+                                    const place = finalResults[index];
+                                    finalResults[index] = {
+                                        ...place,
+                                        name: data.name || place.name,
+                                        formatted_address: data.address || place.formatted_address,
+                                        price_level: data.avgCheck ? (data.avgCheck > 50 ? 4 : data.avgCheck > 30 ? 3 : data.avgCheck > 15 ? 2 : 1) : place.price_level,
+                                        types: data.cuisineTypes && data.cuisineTypes.length > 0 ? [...data.cuisineTypes, ...place.types] : place.types
+                                    };
+                                }
+                            }
+                        }
+                    });
+
+                } catch (err) {
+                    console.error("[Discover] Failed to fetch claim overrides (Cache Hit):", err);
+                }
             }
-        } else {
-            console.log(`[Discover] Cache MISS for grid ${gridKey}`);
+
+            return NextResponse.json({
+                results: finalResults,
+                cache: {
+                    hit: true,
+                    grid_key: gridKey,
+                    cached_at: cacheData.cached_at,
+                    expires_at: cacheData.expires_at,
+                }
+            });
         }
+
+        console.log(`[Discover] Cache MISS for grid ${gridKey}`);
 
         // Cache miss or expired - fetch from Google Places API
         // MIGRATION: Switched to Places API v1 to support Field Masking (Cost Saving)
@@ -85,10 +116,6 @@ export async function GET(request: NextRequest) {
             headers: {
                 "Content-Type": "application/json",
                 "X-Goog-Api-Key": process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY as string,
-                // COST SAVING: Only fetch what we display on the card
-                // Basic: name, id, photos, types
-                // Contact: opening hours (User Requested)
-                // Atmosphere: rating, userRatingCount, priceLevel, reviews (User Requested)
                 "X-Goog-FieldMask": "places.name,places.id,places.displayName,places.formattedAddress,places.types,places.rating,places.userRatingCount,places.priceLevel,places.photos,places.location,places.regularOpeningHours,places.reviews"
             },
             body: JSON.stringify({
@@ -168,31 +195,86 @@ export async function GET(request: NextRequest) {
             }))
         }));
 
-        // Cache the results in Firestore (only if we have results)
+        // Cache the results in Firestore (unified)
         if (places.length > 0) {
-            const cachedPlaces: CachedPlace[] = places.map(p => placeToCache(p, gridKey, CACHE_TTL_MS));
+            const cachedPlaces: CachedPlace[] = places.map(p => placeToCache(p, gridKey, CACHE_DURATIONS.PLACES_GRID));
 
             const cacheEntry: PlacesCacheEntry = {
                 grid_key: gridKey,
                 places: cachedPlaces,
                 cached_at: now,
-                expires_at: now + CACHE_TTL_MS,
+                expires_at: now + CACHE_DURATIONS.PLACES_GRID,
                 search_params: { lat, lng, radius, type }
             };
 
-            // Save to Firestore (fire and forget for speed)
-            cacheRef.set(cacheEntry).catch(err => {
-                console.error("[Discover] Failed to cache places:", err);
-            });
+            // Unified Cache Set - Pass a userId if available, or 'system'
+            // Since this is a public endpoint, we might not have userId readily available in the GET params without auth check
+            // We'll pass 'system-discover' as the user for now to satisfy the type requirement if strict, 
+            // but setCache takes optional userId.
+            setCache("places_grid_cache", gridKey, cacheEntry, CACHE_DURATIONS.PLACES_GRID, "system-discover");
+        }
+
+        // --------------------------------------------------------------------------
+        // OVERRIDE LOGIC: Fetch claimed restaurant data and merge
+        // --------------------------------------------------------------------------
+        const finalResults = [...places];
+
+        if (finalResults.length > 0) {
+            try {
+                const placeIds = finalResults.map(p => p.place_id);
+                // Firestore 'in' query limit is 10 usually? Actually 30.
+                // Our maxResultCount is 20. So it is safe.
+                const db = getAdminDb();
+
+
+                // Wait, 'in' query on documentId is tricky without the FieldPath object.
+                // Simpler approach compatible with our limited imports:
+                // Just use getAll if possible, or multiple reads (parallel).
+                // Since max 20, parallel reads are fast enough.
+
+                const claimedDocs = await Promise.all(
+                    placeIds.map(id => db.collection("restaurants").doc(id).get())
+                );
+
+                claimedDocs.forEach(doc => {
+                    if (doc.exists) {
+                        const data = doc.data();
+                        if (data?.isClaimed) {
+                            const index = finalResults.findIndex(p => p.place_id === doc.id);
+                            if (index !== -1) {
+                                // Merge logic
+                                const place = finalResults[index];
+                                finalResults[index] = {
+                                    ...place,
+                                    name: data.name || place.name,
+                                    formatted_address: data.address || place.formatted_address,
+                                    // Map average check to price level (approximate)
+                                    price_level: data.avgCheck ? (data.avgCheck > 50 ? 4 : data.avgCheck > 30 ? 3 : data.avgCheck > 15 ? 2 : 1) : place.price_level,
+                                    // We could append custom cuisine types to 'types' or strictly use them
+                                    types: data.cuisineTypes && data.cuisineTypes.length > 0 ? [...data.cuisineTypes, ...place.types] : place.types
+                                };
+                            }
+                        }
+                    }
+                });
+
+            } catch (err) {
+                console.error("[Discover] Failed to fetch claim overrides:", err);
+                // Continue with Google results on error
+            }
         }
 
         return NextResponse.json({
-            results: places,
+            results: finalResults,
             cache: {
-                hit: false,
+                hit: false, // Technically the base result might be a hit, but we modified it.
+                // Actually, if we hit the cache loop above, we RETURNED already.
+                // We need to move this logic to AFTER the cache/fetch split, OR duplicate it.
+                // The current code returns early on cache hit.
+                // I need to apply this override logic to BOTH paths.
                 grid_key: gridKey,
                 cached_at: now,
-                expires_at: now + CACHE_TTL_MS,
+                expires_at: now + CACHE_DURATIONS.PLACES_GRID,
             }
         });
 

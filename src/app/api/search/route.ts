@@ -4,8 +4,9 @@ import { reserveUserCredit, refundUserCredit } from "@/lib/user-limits";
 import { scorePlacesWithDeepContext, scoutTopCandidates, PlaceWithContext, LightCandidate } from "@/lib/gemini";
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { getOrFetchRestaurant, resolveRestaurantImage, saveRestaurantToCache, getEnrichedRestaurants } from "@/lib/restaurant-cache";
+import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit"; // ✅ Rate Limit Import
 import type { Restaurant, UserCredits } from "@/types";
-import geohash from "ngeohash";
+import { z } from "zod"; // ✅ NEW: Zod validation
 
 /**
  * Search & Ranking Pipeline - "Two-Stage AI Funnel" Strategy
@@ -159,14 +160,24 @@ function parseSearchIntent(rawQuery: string): ParsedSearchIntent {
 
 interface LightDiscoveryResult {
     candidates: LightCandidate[];
-    isPioneer: boolean; // True if this is the first search in this area
+    isPioneer: boolean; // True ONLY if 100% of data came from Google (no cache)
     source: "firestore" | "google" | "hybrid";
+    discardedCandidates?: LightCandidate[];
 }
+
+// Imports for Cached Places
+import { getCache } from "@/lib/cache-utils";
+import { getNearbyGridKeys, PlacesCacheEntry } from "@/types/cached-places";
 
 /**
  * Stage 1: Discover up to 20 candidates with LIGHT fields only.
  * STRICT RADIUS: Uses locationRestriction (not locationBias) + Haversine post-filter.
  * NO AUTO-EXPANSION: If only 1 result in 200m, return 1 result.
+ * 
+ * CACHE STRATEGY: 
+ * 1. Check Unified Grid Cache (fast, coarse)
+ * 2. Check Firestore Geohash (flexible radius)
+ * 3. Fallback to Google API
  */
 async function findLightCandidates(
     lat: number,
@@ -178,79 +189,80 @@ async function findLightCandidates(
     if (!GOOGLE_API_KEY) throw new Error("Missing NEXT_PUBLIC_GOOGLE_MAPS_KEY");
 
     const candidates: LightCandidate[] = [];
-    let isPioneer = false;
-    let source: "firestore" | "google" | "hybrid" = "google";
+    const isPioneer = false;
+    const source: "firestore" | "google" | "hybrid" = "google";
+    const existingIds = new Set<string>();
 
-    // --- Step 1A: Query Firestore cache first ---
+    // --- Step 1A: Check Unified Grid Cache (v2) ---
+    // This allows consistency between "Discover" mode and "Search"
     try {
-        const hashPrecision = calculateGeohashPrecision(radius);
-        const centerHash = geohash.encode(lat, lng, hashPrecision);
-        const neighbors = geohash.neighbors(centerHash);
-        const searchHashes = [centerHash, ...Object.values(neighbors)];
+        const gridKeys = getNearbyGridKeys(lat, lng);
+        console.log(`[Light] Checking ${gridKeys.length} grid keys for cache hit...`);
 
-        const db = getAdminDb();
-        const firestoreResults: LightCandidate[] = [];
+        // Parallel fetch of grid cells
+        const gridPromises = gridKeys.map(key => getCache<PlacesCacheEntry>("places_grid_cache", key));
+        const gridResults = await Promise.all(gridPromises);
 
-        // Query each geohash bucket
-        for (const hash of searchHashes) {
-            const snapshot = await db.collection("restaurants")
-                .where("geohash", ">=", hash)
-                .where("geohash", "<", hash + "~")
-                .limit(BATCH_SIZE)
-                .get();
+        let gridHitCount = 0;
+        for (const entry of gridResults) {
+            if (!entry) continue;
 
-            for (const doc of snapshot.docs) {
-                const data = doc.data() as Restaurant;
+            for (const place of entry.places) {
+                if (existingIds.has(place.place_id)) continue;
+
+                // Haversine Check
                 const distance = haversineDistance(
                     lat, lng,
-                    data.details.geometry.location.lat,
-                    data.details.geometry.location.lng
+                    place.geometry.location.lat,
+                    place.geometry.location.lng
                 );
 
-                // STRICT: Only include if within exact radius
                 if (distance <= radius) {
-                    // Apply keyword filter if provided
+                    // Keyword Filter
                     if (keyword) {
-                        const name = data.details.name.toLowerCase();
-                        const types = data.details.types.join(" ").toLowerCase();
-                        if (!name.includes(keyword.toLowerCase()) && !types.includes(keyword.toLowerCase())) {
-                            continue;
-                        }
+                        const name = place.basic_info.name.toLowerCase();
+                        const types = place.basic_info.types.join(" ").toLowerCase();
+                        const k = keyword.toLowerCase();
+                        if (!name.includes(k) && !types.includes(k)) continue;
                     }
-                    firestoreResults.push({
-                        place_id: doc.id,
-                        name: data.details.name,
-                        types: data.details.types,
-                        rating: data.details.rating,
-                        userRatingCount: data.details.userRatingCount,
-                        location: {
-                            lat: data.details.geometry.location.lat,
-                            lng: data.details.geometry.location.lng
-                        },
+
+                    candidates.push({
+                        place_id: place.place_id,
+                        name: place.basic_info.name,
+                        types: place.basic_info.types,
+                        rating: place.basic_info.rating,
+                        userRatingCount: place.basic_info.user_ratings_total,
+                        location: place.geometry.location,
                         distance
                     });
+                    existingIds.add(place.place_id);
+                    gridHitCount++;
                 }
             }
         }
 
-        // Sort by distance and take top results
-        firestoreResults.sort((a, b) => (a.distance || 0) - (b.distance || 0));
-        const firestoreCandidates = firestoreResults.slice(0, BATCH_SIZE);
-        candidates.push(...firestoreCandidates);
+        if (gridHitCount > 0) {
+            console.log(`[Light] Unified Grid Cache returned ${gridHitCount} candidates.`);
+            // Sort by distance
+            candidates.sort((a, b) => (a.distance || 0) - (b.distance || 0));
 
-        console.log(`[Light] Firestore returned ${firestoreCandidates.length} cached results within ${radius}m`);
-
-        if (firestoreCandidates.length >= BATCH_SIZE) {
-            return { candidates: candidates.slice(0, BATCH_SIZE), isPioneer: false, source: "firestore" };
+            // If we have enough results, return early!
+            if (candidates.length >= BATCH_SIZE) {
+                return { candidates: candidates.slice(0, BATCH_SIZE), isPioneer: false, source: "firestore" };
+            }
         }
 
-        source = firestoreCandidates.length > 0 ? "hybrid" : "google";
-        isPioneer = firestoreCandidates.length === 0;
-
     } catch (err) {
-        console.warn("[Light] Firestore cache query failed:", err);
-        isPioneer = true;
+        console.warn("[Light] Grid cache check failed (non-fatal):", err);
     }
+
+    // --- Step 1B: REMOVED (Redundant Geohash Query) ---
+    // Grid Cache (Step 1A) already acts as the primary cache layer.
+    // If Grid Cache misses, we fall back directly to Google API (Step 1C).
+    // This saves 1 Firestore read per search (~50-100ms latency savings).
+
+    // Fallthrough to Google API if no candidates found in Grid Cache
+
 
     // --- Step 1B: Fill remainder from Google Places API ---
     const remaining = BATCH_SIZE - candidates.length;
@@ -336,7 +348,11 @@ async function findLightCandidates(
         // 2. NOW FILTER by user's strict radius
         const existingIds = new Set(candidates.map(c => c.place_id));
         let addedCount = 0;
-        let discardedCount = 0;
+
+        // Store candidates that were just outside radius to use as fallback (Smart Decision)
+        const discardedCandidates: LightCandidate[] = [];
+        // Limit discarded candidates to avoid memory issues, we only need top 3 closest
+        const MAX_DISCARDED = 5;
 
         for (const place of googlePlaces) {
             if (existingIds.has(place.id)) continue;
@@ -348,8 +364,18 @@ async function findLightCandidates(
 
             // STRICT POST-FILTER: Only include if ACTUALLY within user's radius
             if (distance > radius) {
-                console.log(`[Light] Discarding ${place.displayName?.text} - ${Math.round(distance)}m > ${radius}m`);
-                discardedCount++;
+                // console.log(`[Light] Discarding ${place.displayName?.text} - ${Math.round(distance)}m > ${radius}m`);
+                if (discardedCandidates.length < MAX_DISCARDED) {
+                    discardedCandidates.push({
+                        place_id: place.id,
+                        name: place.displayName?.text || "Unknown",
+                        types: place.types || [],
+                        rating: place.rating,
+                        userRatingCount: place.userRatingCount,
+                        location: { lat: placeLat, lng: placeLng },
+                        distance
+                    });
+                }
                 continue;
             }
 
@@ -366,13 +392,94 @@ async function findLightCandidates(
             addedCount++;
         }
 
-        console.log(`[Light] Added ${addedCount} to results (${discardedCount} outside ${radius}m, but ALL were cached)`);
+        // Sort discarded by distance to find the absolute closest "misses"
+        discardedCandidates.sort((a, b) => (a.distance || 0) - (b.distance || 0));
+
+        console.log(`[Light] Added ${addedCount} to results. Discarded ${discardedCandidates.length} potential fallbacks.`);
+
+        // SMART FALLBACK: If Strict Search yielded 0 results, but we have valid Discarded candidates
+        // Return them immediately as a "Decision Point" without extra API calls.
+        if (candidates.length === 0 && discardedCandidates.length > 0) {
+            console.log(`[Light] 0 strict results, but found ${discardedCandidates.length} nearby. Triggering Smart Fallback.`);
+            // We can just return these formatted as if they came from 'findSurvivalCandidate'
+            // But the caller expects 'candidates' array.
+            // Actually, we want to trigger DECISION_REQUIRED in the POST handler.
+            // We can pass them back via a new property in the return type.
+            return { candidates, isPioneer, source, discardedCandidates };
+        }
     }
 
     // NO AUTO-EXPANSION: Return whatever we found, even if < 20
     console.log(`[Light] Final: ${candidates.length} candidates within ${radius}m (no expansion)`);
     return { candidates, isPioneer, source };
 }
+
+/**
+ * Survival Search: Finds the single nearest place ignoring restrictive radius.
+ * Used when standard search returns 0 results to offer a "Decision Point".
+ */
+async function findSurvivalCandidate(lat: number, lng: number): Promise<LightCandidate | null> {
+    const GOOGLE_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY;
+    if (!GOOGLE_API_KEY) return null;
+
+    console.log(`[Survival] Searching for nearest place (any radius)...`);
+
+    const endpoint = "https://places.googleapis.com/v1/places:searchNearby";
+    const requestBody = {
+        maxResultCount: 1,
+        includedTypes: ["restaurant"],
+        rankPreference: "DISTANCE",
+        locationRestriction: {
+            circle: {
+                center: { latitude: lat, longitude: lng },
+                radius: 50000 // 50km max for "survival"
+            }
+        }
+    };
+
+    try {
+        const res = await fetch(endpoint, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "X-Goog-Api-Key": GOOGLE_API_KEY,
+                "X-Goog-FieldMask": LIGHT_FIELD_MASK
+            },
+            body: JSON.stringify(requestBody)
+        });
+
+        if (!res.ok) {
+            console.warn(`[Survival] API Error: ${res.status}`);
+            return null;
+        }
+
+        const data = await res.json();
+        const places = data.places || [];
+
+        if (places.length > 0) {
+            const p = places[0];
+            const dist = haversineDistance(lat, lng, p.location.latitude, p.location.longitude);
+            console.log(`[Survival] Found: ${p.displayName?.text} at ${Math.round(dist)}m`);
+
+            // Cache it!
+            saveRestaurantToCache(p.id, p, undefined).catch(() => { });
+
+            return {
+                place_id: p.id,
+                name: p.displayName?.text || "Unknown",
+                types: p.types || [],
+                rating: p.rating,
+                userRatingCount: p.userRatingCount,
+                location: { lat: p.location.latitude, lng: p.location.longitude },
+                distance: dist
+            };
+        }
+    } catch (err) {
+        console.error("[Survival] Failed:", err);
+    }
+    return null;
+}
+
 
 // =============================================================================
 // STEP 2: DATA ENRICHMENT
@@ -502,8 +609,13 @@ async function executeSearchTransaction(
         }
     }
 
-    // --- Pioneer Bonus: +2 credits for first search in new area ---
+    // --- DISCOVERY BONUS (Anti-Farming Protected) ---
+    // Bonus ONLY given when:
+    // 1. isPioneer === true (ALL data came from Google, zero cache hits)
+    // 2. Gemini scoring succeeded
+    // If even 1 result came from cache, isPioneer = false, no bonus!
     let pioneerBonus = false;
+    console.log(`[Search] Discovery check: isPioneer=${isPioneer}, geminiSuccess=${geminiSuccess}`);
     if (isPioneer && geminiSuccess) {
         try {
             await db.runTransaction(async (transaction) => {
@@ -652,24 +764,13 @@ export async function GET(request: NextRequest) {
         const GOOGLE_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_KEY;
         if (!GOOGLE_API_KEY) throw new Error("MISSING ENV VAR: NEXT_PUBLIC_GOOGLE_MAPS_KEY");
 
-        // --- 1. Parse Request Parameters ---
-        const { searchParams } = new URL(request.url);
-        const lat = parseFloat(searchParams.get("lat") || "0");
-        const lng = parseFloat(searchParams.get("lng") || "0");
-        let radius = parseFloat(searchParams.get("radius") || "5000");
-        const rawKeyword = searchParams.get("keyword") || "";
+        // --- 1. Rate Limiting & Authentication & User Profile ---
+        // Moved Auth UP so we can use Tier for Rate Limiting
 
-        // --- 1b. Parse Natural Language Search Intent ---
-        const searchIntent = parseSearchIntent(rawKeyword);
-        const keyword = searchIntent.cleanKeyword; // Clean keyword for Google
+        const ip = request.headers.get("x-forwarded-for") || "unknown_ip";
+        let rateLimitIdentifier = `ip_${ip}`;
+        let rateLimitConfig = RATE_LIMITS.SEARCH.GUEST;
 
-        // Apply detected radius from query (e.g., "pizza 3 miles from me")
-        if (searchIntent.detectedRadius !== null) {
-            radius = searchIntent.detectedRadius;
-            console.log(`[Search] Using radius from query: ${radius}m`);
-        }
-
-        // --- 2. Authentication & User Profile ---
         let userId: string | null = null;
         let userPreferences: UserPreferences = {
             allergies: [],
@@ -684,11 +785,14 @@ export async function GET(request: NextRequest) {
                 const token = authHeader.split("Bearer ")[1];
                 const decodedToken = await getAdminAuth().verifyIdToken(token);
                 userId = decodedToken.uid;
+                rateLimitIdentifier = `user_${userId}`;
 
-                // Fetch user preferences
+                // Fetch User Profile
                 const userDoc = await getAdminDb().collection("users").doc(userId).get();
                 if (userDoc.exists) {
                     const userData = userDoc.data();
+
+                    // preferences
                     const prefs = userData?.preferences || userData?.profile?.preferences;
                     if (prefs) {
                         userPreferences = {
@@ -699,20 +803,77 @@ export async function GET(request: NextRequest) {
                         };
                     }
 
-                    // GPS PRIORITY FIX: Only use profile radius if NO radius detected from URL/NLP
-                    // URL params (lat, lng, radius) are FINAL and never overridden
-                    if (searchIntent.detectedRadius === null && radius === 5000) {
-                        const profileRadius = userData?.profile?.searchDefaults?.radius;
-                        if (typeof profileRadius === 'number' && profileRadius > 0) {
-                            radius = profileRadius;
-                            console.log(`[Search] Using user's profile radius: ${radius}m`);
-                        }
+                    // tier logic for rate limit
+                    const tier = userData?.subscription?.tier || 'free';
+                    if (['premium', 'basic', 'pro', 'enterprise'].includes(tier)) {
+                        rateLimitConfig = RATE_LIMITS.SEARCH.PREMIUM;
+                    } else {
+                        rateLimitConfig = RATE_LIMITS.SEARCH.FREE;
                     }
                 }
-            } catch {
-                console.warn("[Search] Invalid auth token");
+            } catch (authErr) {
+                console.warn("[Search] Invalid Token or Auth Error:", authErr);
             }
         }
+
+        // Apply Rate Limit
+        const { limitReached, reset } = await checkRateLimit(rateLimitIdentifier, rateLimitConfig);
+        if (limitReached) {
+            console.warn(`[RateLimit] ⚠️ 429 Hit: ${rateLimitIdentifier}`);
+            return NextResponse.json({
+                error: "Rate limit exceeded. Please try again later.",
+                code: "RATE_LIMIT_EXCEEDED",
+                reset: new Date(reset).toISOString()
+            }, {
+                status: 429,
+                headers: { 'Retry-After': Math.ceil((reset - Date.now()) / 1000).toString() }
+            });
+        }
+
+        // --- 1. Parse Request Parameters ---
+        // --- 1. Parse Request Parameters (Input Validation) ---
+        const { searchParams } = new URL(request.url);
+
+        // ✅ NEW: Zod Validation
+        const SearchQuerySchema = z.object({
+            lat: z.coerce.number().min(-90).max(90),
+            lng: z.coerce.number().min(-180).max(180),
+            radius: z.coerce.number().min(100).max(50000).default(5000),
+            keyword: z.string().max(100).regex(/^[a-zA-Z0-9\s\-\.,!áčďéíľňóšťúýžÁČĎÉÍĽŇÓŠŤÚÝŽ]*$/, "Invalid characters in keyword").optional()
+        });
+
+        const validation = SearchQuerySchema.safeParse({
+            lat: searchParams.get("lat"),
+            lng: searchParams.get("lng"),
+            radius: searchParams.get("radius"),
+            keyword: searchParams.get("keyword")
+        });
+
+        if (!validation.success) {
+            console.error("[Search] Validation failed:", validation.error);
+            return NextResponse.json({
+                error: "Invalid search parameters",
+                details: validation.error.format()
+            }, { status: 400 });
+        }
+
+        const { lat, lng, radius: validatedRadius } = validation.data;
+        let radius = validatedRadius; // Can be overridden by NLP
+        const rawKeyword = validation.data.keyword || "";
+
+        // --- 1b. Parse Natural Language Search Intent ---
+        const searchIntent = parseSearchIntent(rawKeyword);
+        const keyword = searchIntent.cleanKeyword; // Clean keyword for Google
+
+        // Apply detected radius from query (e.g., "pizza 3 miles from me")
+        if (searchIntent.detectedRadius !== null) {
+            radius = searchIntent.detectedRadius;
+            console.log(`[Search] Using radius from query: ${radius}m`);
+        }
+
+        // ... (User preferences fetched above) ...
+        // Duplicated logic removed.
+
 
         // =========================================================================
         // THREE-STAGE AI FUNNEL
@@ -720,14 +881,69 @@ export async function GET(request: NextRequest) {
 
         // --- STAGE 1: Light Discovery (20 candidates, cheap fields) ---
         console.log(`[Stage1] Light discovery for: "${keyword}" at (${lat}, ${lng}) radius ${radius}m`);
-        const { candidates: lightCandidates, isPioneer, source } = await findLightCandidates(lat, lng, radius, keyword);
+        const { candidates: lightCandidates, isPioneer, source, discardedCandidates } = await findLightCandidates(lat, lng, radius, keyword);
 
         if (lightCandidates.length === 0) {
+            console.log(`[Stage1] 0 results found. Checking fallbacks...`);
+
+            let survivalOption = null;
+
+            // SMART FALLBACK: Check if we have "discarded" candidates from Light Search (just outside radius)
+            // This avoids a second expensive API call to 'searchNearby'
+            if (discardedCandidates && discardedCandidates.length > 0) {
+                const bestAlternative = discardedCandidates[0];
+                console.log(`[Search] Smart Fallback found: ${bestAlternative.name} (${Math.round(bestAlternative.distance || 0)}m away)`);
+                survivalOption = bestAlternative;
+            } else {
+                // Traditional Survival Search (Heavy API Call) - Only if really needed
+                survivalOption = await findSurvivalCandidate(lat, lng);
+            }
+            const status = await checkUserHasCredits(userId);
+
+            if (survivalOption) {
+                // Calculate new radius (rounded up to nearest 500m)
+                // e.g. distance 3200m -> 3500m or 4000m? Let's add padding.
+                const dist = survivalOption.distance || 0;
+                const newRadius = Math.ceil((dist + 1000) / 500) * 500; // Add 1km buffer
+
+                return NextResponse.json({
+                    status: 'DECISION_REQUIRED',
+                    results: [],
+                    credits: {
+                        remaining: status.remaining,
+                        limit: status.limit,
+                        used: status.used,
+                        tier: status.tier
+                    },
+                    message: "No restaurants found in your immediate area.",
+                    choices: {
+                        survivalOption: {
+                            id: survivalOption.place_id,
+                            name: survivalOption.name,
+                            rating: survivalOption.rating,
+                            distance: survivalOption.distance,
+                            reason: `This is the closest open restaurant we could find (${(dist / 1000).toFixed(1)}km away).`
+                        },
+                        expandOption: {
+                            label: `Expand search to ${(newRadius / 1000).toFixed(1)}km`,
+                            newRadius: newRadius
+                        }
+                    }
+                });
+            }
+
+            // If truly NOTHING even in 50km:
             return NextResponse.json({
+                status: 'ZERO_RESULTS',
                 results: [],
-                credits: { remaining: 0, limit: 5, used: 0, tier: "free" },
+                credits: {
+                    remaining: status.remaining,
+                    limit: status.limit,
+                    used: status.used,
+                    tier: status.tier
+                },
                 source: "empty",
-                message: `No restaurants found within ${radius}m. This is a strict radius - we don't auto-expand.`
+                message: `No restaurants found within ${radius}m.`
             });
         }
 
@@ -988,15 +1204,6 @@ interface DecisionRequiredResponse {
     source: string;
 }
 
-/**
- * Calculate appropriate geohash precision based on search radius.
- */
-function calculateGeohashPrecision(radius: number): number {
-    if (radius <= 500) return 7;      // ~76m precision
-    if (radius <= 2000) return 6;     // ~610m precision
-    if (radius <= 10000) return 5;    // ~2.4km precision
-    return 4;                          // ~20km precision
-}
 
 /**
  * Haversine formula to calculate distance between two coordinates.

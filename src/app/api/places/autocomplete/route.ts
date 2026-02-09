@@ -34,7 +34,13 @@ export async function GET(request: NextRequest) {
                 // Using "includeQueryPredictions": true is optional but good for general search.
                 // But specifically for Locations/Cities, we might want to restrict types.
                 // User requirement: "Localita Selector". Usually cities/regions.
-                includedPrimaryTypes: ["locality", "administrative_area_level_1", "administrative_area_level_2", "country"],
+                // Allow overriding for Claim/Establishment search
+                // If 'types' is 'all', we omit the field to allow all types (establishments, etc.)
+                includedPrimaryTypes: searchParams.get("types") === 'all'
+                    ? undefined
+                    : (searchParams.get("types")
+                        ? searchParams.get("types")!.split(",")
+                        : ["locality", "administrative_area_level_1", "administrative_area_level_2", "country"]),
                 locationBias: {
                     circle: {
                         center: { latitude: 48.669, longitude: 19.699 }, // Central Slovakia Bias

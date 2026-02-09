@@ -5,6 +5,23 @@ interface RateLimitConfig {
     windowMs: number;   // Window in milliseconds
 }
 
+// --- Configuration Presets ---
+export const RATE_LIMITS = {
+    SEARCH: {
+        GUEST: { limit: 5, windowMs: 10 * 60 * 1000 },   // 5 reqs / 10 mins
+        FREE: { limit: 10, windowMs: 60 * 1000 },        // 10 reqs / 1 min
+        PREMIUM: { limit: 30, windowMs: 60 * 1000 },     // 30 reqs / 1 min
+    },
+    GEMINI: {
+        GUEST: { limit: 5, windowMs: 60 * 1000 },         // 5 reqs / 1 min
+        FREE: { limit: 10, windowMs: 60 * 1000 },        // 10 reqs / 1 min
+        PREMIUM: { limit: 30, windowMs: 60 * 1000 },     // 30 reqs / 1 min
+    },
+    CORE: {
+        DEFAULT: { limit: 60, windowMs: 60 * 1000 }      // 60 reqs / 1 min (general API)
+    }
+};
+
 /**
  * Checks if a request should be rate limited.
  * @param identifier Unique ID (IP address, User ID)
@@ -12,11 +29,12 @@ interface RateLimitConfig {
  * @returns { limitReached: boolean, remaining: number, reset: number }
  */
 export async function checkRateLimit(identifier: string, config: RateLimitConfig) {
+    // ... existing implementation ...
     const now = Date.now();
     const docRef = getAdminDb().collection("rate_limits").doc(identifier);
 
     try {
-        const result = await getAdminDb().runTransaction(async (transaction) => {
+        const result = await getAdminDb().runTransaction(async (transaction): Promise<{ limitReached: boolean, remaining: number, reset: number }> => {
             const doc = await transaction.get(docRef);
 
             if (!doc.exists) {
@@ -53,7 +71,7 @@ export async function checkRateLimit(identifier: string, config: RateLimitConfig
         return result;
     } catch (error) {
         console.error("Rate limit check error:", error);
-        // Fail open if database issue, or closed? Usually open for UX, but closed for security.
+        // Fail open if database issue
         return { limitReached: false, remaining: 1, reset: now + config.windowMs };
     }
 }

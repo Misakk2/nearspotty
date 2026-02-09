@@ -3,59 +3,181 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { GeminiScore } from "@/types";
 import { GeminiResponseSchema, type StrictGeminiScore } from "@/lib/gemini-schema";
+import { getAdminDb } from "./firebase-admin"; // ✅ NEW: For usage tracking
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
-const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" }); // Using Flash for speed
+const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" });
 
-/**
- * Helper: Retry operation with exponential backoff
- */
-async function retryOperation<T>(operation: () => Promise<T>, maxRetries: number = 3, delayMs: number = 1000): Promise<T> {
+// ✅ NEW: Timeout Configuration
+const TIMEOUT_MS = 60000; // 60 seconds
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 1000;
+
+// =============================================================================
+// ✅ NEW: USAGE TRACKING & MONITORING
+// =============================================================================
+
+export interface GeminiUsageMetrics {
+    operation: 'scout' | 'score' | 'batch-lite';
+    tokensUsed: number;
+    candidateCount: number;
+    userId?: string;
+    success: boolean;
+    latencyMs: number;
+    timestamp: Date;
+    cost: number; // In USD
+}
+
+export async function logGeminiUsage(metrics: GeminiUsageMetrics): Promise<void> {
+    try {
+        await getAdminDb().collection('gemini_usage').add({
+            ...metrics,
+            timestamp: metrics.timestamp.toISOString()
+        });
+
+        // ✅ Console log for real-time monitoring
+        console.log(`[Gemini] ${metrics.operation} - ${metrics.tokensUsed} tokens ($${metrics.cost.toFixed(4)}) - ${metrics.latencyMs}ms`);
+    } catch (err) {
+        console.error('[Gemini] Failed to log usage:', err);
+        // Non-blocking - don't fail request if logging fails
+    }
+}
+
+// ✅ NEW: Cost calculation (Flash model pricing)
+export function calculateCost(tokens: number): number {
+    // Gemini 2.0 Flash pricing: $0.10 per 1M input tokens
+    return (tokens / 1_000_000) * 0.10;
+}
+
+// =============================================================================
+// ✅ IMPROVED: RETRY WITH EXPONENTIAL BACKOFF
+// =============================================================================
+
+async function retryOperation<T>(
+    operation: () => Promise<T>,
+    maxRetries: number = MAX_RETRIES,
+    delayMs: number = RETRY_DELAY_MS
+): Promise<T> {
     let lastError: any;
-    for (let i = 0; i < maxRetries; i++) {
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
             return await operation();
         } catch (error: any) {
             lastError = error;
-            // Retry only on 503 (Overloaded) or 429 (Rate Limit) or network errors
-            const isRetryable = error.status === 503 || error.status === 429 || error.message?.includes('fetch') || error.message?.includes('network');
-            if (!isRetryable) throw error;
 
-            console.warn(`[Gemini] Attempt ${i + 1} failed. Retrying in ${delayMs}ms...`);
-            await new Promise(resolve => setTimeout(resolve, delayMs));
-            delayMs *= 2; // Exponential backoff
+            const isRetryable =
+                error.status === 503 || // Service Overloaded
+                error.status === 429 || // Rate Limit
+                error.message?.includes('fetch') ||
+                error.message?.includes('network');
+
+            if (!isRetryable || attempt === maxRetries) {
+                throw error;
+            }
+
+            const backoffDelay = delayMs * Math.pow(2, attempt - 1);
+            console.warn(`[Gemini] Attempt ${attempt}/${maxRetries} failed. Retrying in ${backoffDelay}ms...`);
+            await new Promise(resolve => setTimeout(resolve, backoffDelay));
         }
     }
+
     throw lastError;
 }
 
-export interface PlaceForScoring {
-    place_id: string;
-    name: string;
-    types: string[];
-    rating?: number;
-    price_level?: number;
-    vicinity?: string;
-}
+// =============================================================================
+// ✅ NEW: TIMEOUT WRAPPER
+// =============================================================================
 
-export interface ScoredPlace extends PlaceForScoring {
-    ai_score?: GeminiScore;
-}
+async function withTimeout<T>(
+    promise: Promise<T>,
+    timeoutMs: number,
+    operation: string
+): Promise<T> {
+    let timeoutId: NodeJS.Timeout | null = null;
 
-export interface PlaceWithContext extends PlaceForScoring {
-    editorialSummary?: string;
-    reviews?: { text: string; rating: number; flag?: "SAFE_CANDIDATE" | "RISK" }[];
-    websiteUri?: string;
-    servesVegetarianFood?: boolean;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => {
+            reject(new Error(`GEMINI_TIMEOUT_${operation}`));
+        }, timeoutMs);
+    });
+
+    try {
+        const result = await Promise.race([promise, timeoutPromise]);
+        if (timeoutId) clearTimeout(timeoutId);
+        return result;
+    } catch (error) {
+        if (timeoutId) clearTimeout(timeoutId);
+        throw error;
+    }
 }
 
 // =============================================================================
-// STAGE 2: LIGHTWEIGHT SCOUT (Dietary-Aware Filtering)
+// ✅ IMPROVED: FALLBACK SCORE GENERATOR
 // =============================================================================
 
-/**
- * Light candidate from Stage 1 discovery (minimal fields)
- */
+function generateFallbackScores(
+    places: any[],
+    reason: 'timeout' | 'error' | 'dietary_filter'
+): Map<string, GeminiScore> {
+    const scores = new Map<string, GeminiScore>();
+
+    places.forEach(p => {
+        const baseScore = Math.min(100, (p.rating || 3) * 20);
+
+        scores.set(p.place_id, {
+            matchScore: baseScore,
+            relevanceScore: 50,
+            safetyFlag: false,
+            shortReason: reason === 'timeout'
+                ? "AI analysis timed out - showing rating-based score"
+                : reason === 'error'
+                    ? "AI temporarily unavailable - showing basic ranking"
+                    : "Filtered by dietary preferences",
+            recommendedDish: "",
+            pros: [`${p.rating || 'N/A'}⭐ rating`],
+            cons: ["AI analysis unavailable"],
+            warnings: []
+        });
+    });
+
+    return scores;
+}
+
+// =============================================================================
+// ✅ IMPROVED: DIETARY-AWARE FALLBACK
+// =============================================================================
+
+function filterByDietaryRestrictions(
+    candidates: LightCandidate[],
+    userProfile: UserDietaryProfile
+): LightCandidate[] {
+    const isVegan = userProfile.dietary?.some(d => d.toLowerCase().includes('vegan'));
+    const isVegetarian = userProfile.dietary?.some(d => d.toLowerCase().includes('vegetarian'));
+
+    if (!isVegan && !isVegetarian) {
+        return candidates; // No filtering needed
+    }
+
+    // ✅ RULE-BASED FILTERING (when Gemini fails)
+    return candidates.filter(c => {
+        const types = c.types.map(t => t.toLowerCase());
+        const name = c.name.toLowerCase();
+
+        // Exclude obvious meat-heavy places
+        const meatKeywords = ['steakhouse', 'bbq', 'grill', 'butcher', 'meat_restaurant'];
+        const hasMeat = meatKeywords.some(kw =>
+            types.some(t => t.includes(kw)) || name.includes(kw)
+        );
+
+        return !hasMeat;
+    });
+}
+
+// =============================================================================
+// STAGE 2: SCOUT (WITH IMPROVEMENTS)
+// =============================================================================
+
 export interface LightCandidate {
     place_id: string;
     name: string;
@@ -63,50 +185,39 @@ export interface LightCandidate {
     rating?: number;
     userRatingCount?: number;
     location: { lat: number; lng: number };
-    distance?: number; // Haversine distance in meters
+    distance?: number;
 }
 
 interface UserDietaryProfile {
     allergies?: string[];
-    dietary?: string[];    // e.g., ["vegan", "vegetarian"]
+    dietary?: string[];
     cuisines?: string[];
     hasSuperlative?: boolean;
 }
 
-/**
- * Scout Result: Distinguishes between perfect matches and survival (compromise) options
- */
 export interface ScoutResult {
-    /** IDs of places that perfectly match dietary requirements */
     perfectMatches: string[];
-    /** Single best compromise if no perfect matches exist */
     survivalOption?: {
         id: string;
-        reason: string; // e.g., "Italian - likely veggie pasta options"
+        reason: string;
     };
-    /** True if only survival option available (no perfect matches) */
     isSurvivalMode: boolean;
 }
 
-/**
- * AI Scout: Selects top N candidates from 20 light candidates.
- * Performs dietary-aware filtering with "Survival Mode" for compromises.
- * 
- * @param lightCandidates - 20 candidates with light fields
- * @param keyword - Search keyword (e.g., "pizza")
- * @param userProfile - User dietary preferences for filtering
- * @returns ScoutResult with perfectMatches or survivalOption
- */
 export async function scoutTopCandidates(
     lightCandidates: LightCandidate[],
     keyword: string,
     userProfile: UserDietaryProfile
 ): Promise<ScoutResult> {
+    const startTime = Date.now();
     const emptyResult: ScoutResult = { perfectMatches: [], isSurvivalMode: false };
+
     if (!lightCandidates.length) return emptyResult;
 
-    // If less than or equal to 6 candidates and no dietary restrictions, return all as perfect
-    const hasDietaryRestrictions = (userProfile.dietary?.length ?? 0) > 0 || (userProfile.allergies?.length ?? 0) > 0;
+    const hasDietaryRestrictions =
+        (userProfile.dietary?.length ?? 0) > 0 ||
+        (userProfile.allergies?.length ?? 0) > 0;
+
     if (lightCandidates.length <= 6 && !hasDietaryRestrictions) {
         console.log(`[Scout] Only ${lightCandidates.length} candidates, no restrictions, returning all.`);
         return { perfectMatches: lightCandidates.map(c => c.place_id), isSurvivalMode: false };
@@ -191,7 +302,7 @@ GLUTEN-FREE SURVIVAL (severely limited):
 ` : ''}
 
 # CANDIDATES
-${JSON.stringify(candidatesPayload, null, 2)}
+${JSON.stringify(candidatesPayload)}
 
 # OUTPUT FORMAT (JSON only, no markdown)
 {
@@ -210,134 +321,102 @@ RULES:
 `;
 
     try {
-        const result = await retryOperation(() => model.generateContent(scoutPrompt));
+        // ✅ NEW: Timeout wrapper
+        const result = await withTimeout(
+            retryOperation(() => model.generateContent(scoutPrompt)),
+            TIMEOUT_MS,
+            'SCOUT'
+        );
+
         const response = await result.response;
         const text = response.text();
 
-        // Clean and parse
-        const jsonStr = text.replace(/```json\n?|\n?```/g, "").trim();
-        const parsed = JSON.parse(jsonStr) as ScoutResult;
+        // ✅ NEW: Track usage
+        const metadata = await response.usageMetadata;
+        if (metadata) {
+            await logGeminiUsage({
+                operation: 'scout',
+                tokensUsed: metadata.totalTokenCount || 0,
+                candidateCount: lightCandidates.length,
+                success: true,
+                latencyMs: Date.now() - startTime,
+                cost: calculateCost(metadata.totalTokenCount || 0),
+                timestamp: new Date()
+            });
+        }
 
-        // Validate: ensure all IDs exist in candidates
+        // ✅ IMPROVED: Safe JSON parsing
+        let parsedJson: any;
+        try {
+            const jsonStr = text.replace(/```json\n?|\n?```/g, "").trim();
+            parsedJson = JSON.parse(jsonStr);
+        } catch (parseError) {
+            console.error('[Scout] JSON parse failed:', text.substring(0, 200));
+            throw new Error('INVALID_JSON');
+        }
+
+        // Validate IDs
         const validIds = new Set(lightCandidates.map(c => c.place_id));
-        const validPerfect = parsed.perfectMatches.filter(id => validIds.has(id)).slice(0, 6);
+        const validPerfect = parsedJson.perfectMatches?.filter((id: string) => validIds.has(id)).slice(0, 6) || [];
 
         const scoutResult: ScoutResult = {
             perfectMatches: validPerfect,
-            isSurvivalMode: validPerfect.length === 0 && !!parsed.survivalOption,
-            survivalOption: parsed.survivalOption && validIds.has(parsed.survivalOption.id)
-                ? parsed.survivalOption
+            isSurvivalMode: validPerfect.length === 0 && !!parsedJson.survivalOption,
+            survivalOption: parsedJson.survivalOption && validIds.has(parsedJson.survivalOption.id)
+                ? parsedJson.survivalOption
                 : undefined
         };
 
         console.log(`[Scout] Result: ${scoutResult.perfectMatches.length} perfect, survival=${scoutResult.isSurvivalMode}`);
-        if (scoutResult.survivalOption) {
-            console.log(`[Scout] Survival: ${scoutResult.survivalOption.id} (${scoutResult.survivalOption.reason})`);
-        }
-
         return scoutResult;
 
-    } catch (error) {
-        console.error("[Scout] AI selection failed, falling back to rating sort:", error);
+    } catch (error: any) {
+        console.error("[Scout] AI selection failed:", error.message);
 
-        // Fallback: Sort by rating and take top 6 as "perfect" matches
-        const fallback = [...lightCandidates]
+        // ✅ Log failure
+        await logGeminiUsage({
+            operation: 'scout',
+            tokensUsed: 0,
+            candidateCount: lightCandidates.length,
+            success: false,
+            latencyMs: Date.now() - startTime,
+            cost: 0,
+            timestamp: new Date()
+        });
+
+        // ✅ IMPROVED: Dietary-aware fallback
+        const filtered = filterByDietaryRestrictions(lightCandidates, userProfile);
+        const fallback = [...filtered]
             .sort((a, b) => (b.rating || 0) - (a.rating || 0))
             .slice(0, 6)
             .map(c => c.place_id);
 
+        console.log(`[Scout] Fallback: ${fallback.length} dietary-filtered results`);
         return { perfectMatches: fallback, isSurvivalMode: false };
     }
 }
 
-/**
- * Scores a list of places based on user profile using Gemini.
- */
-export async function scorePlacesWithGemini(
-    places: PlaceForScoring[],
-    userProfile: any
-): Promise<Map<string, GeminiScore>> {
-    if (!places.length) return new Map();
+// =============================================================================
+// ✅ IMPROVED: DEEP CONTEXT SCORING WITH TIMEOUT
+// =============================================================================
 
-    const placesInfo = places.map((p, i) =>
-        `${i + 1}. "${p.name}" (${p.types.slice(0, 2).join(',')}) | Rat:${p.rating || '-'} | Price:${p.price_level || '-'}`
-    ).join('\n');
-
-    const prompt = `
-Task: Score these ${places.length} restaurants (0-100) for this user:
-Profile: ${JSON.stringify(userProfile)}
-
-Restaurants:
-${placesInfo}
-
-Rules:
-- Score based on safety, dietary fit, and quality.
-- Return a JSON Array matching the input order.
-- NO markdown.
-
-Output Schema:
-[{"matchScore": number, "shortReason": "string (max 10 words)", "recommendedDish": "string", "pros": ["string"], "cons": ["string"]}]
-`;
-
-    try {
-        const result = await retryOperation(() => model.generateContent(prompt));
-        const response = await result.response;
-        const text = response.text();
-        const jsonStr = text.replace(/```json\n?|\n?```/g, "").trim();
-        const scores = JSON.parse(jsonStr);
-
-        const results = new Map<string, GeminiScore>();
-
-        places.forEach((p, i) => {
-            const raw = scores[i] || {};
-            results.set(p.place_id, {
-                matchScore: raw.matchScore || 50,
-                shortReason: raw.shortReason || "Analysis unavailable",
-                recommendedDish: raw.recommendedDish || "",
-                pros: Array.isArray(raw.pros) ? raw.pros : [],
-                cons: Array.isArray(raw.cons) ? raw.cons : [],
-                warnings: []
-            });
-        });
-
-        return results;
-    } catch (error) {
-        console.error("Gemini Scoring Error:", error);
-        return new Map();
-    }
+export interface PlaceForScoring {
+    place_id: string;
+    name: string;
+    types: string[];
+    rating?: number;
+    price_level?: number;
+    vicinity?: string;
 }
 
-/**
- * Generates a friendly "No Exact Match" discovery message in Slovak.
- */
-export async function generateDiscoveryMessage(
-    keyword: string,
-    availableCategories: string[],
-    userProfile: any
-): Promise<string> {
-    const prompt = `
-    Role: Friendly local guide "Nearspotty".
-    Language: Strictly English.
-    Situation: User searched for "${keyword}" but we found NO exact matches nearby.
-    Available places have these categories: ${availableCategories.join(', ')}.
-    User Profile: ${JSON.stringify(userProfile)}
-
-    Task: Write a short, helpful message (max 2 sentences).
-    1. Acknowledge we couldn't find specific "${keyword}".
-    2. Suggest an alternative from available categories based on user profile OR suggest increasing radius.
-    3. Be distinct but polite.
-
-    Example output: "We couldn't find any ${keyword} nearby, but based on your love for Asian cuisine, you might enjoy these Thai alternatives."
-    `;
-
-    try {
-        const result = await retryOperation(() => model.generateContent(prompt));
-        return result.response.text();
-    } catch (e) {
-        console.error("Discovery Message Error:", e);
-        return `We couldn't find any "${keyword}" in this area. Try increasing the search radius or look for other businesses nearby.`;
-    }
+export interface PlaceWithContext extends PlaceForScoring {
+    editorialSummary?: string;
+    reviews?: { text: string; rating: number; flag?: "SAFE_CANDIDATE" | "RISK" }[];
+    websiteUri?: string;
+    servesVegetarianFood?: boolean;
 }
+
+// ... (Keep existing STRICT_SYSTEM_INSTRUCTION and buildStrictPrompt)
 
 /**
  * Strict Concierge System Instruction
@@ -376,6 +455,7 @@ If user is VEGETARIAN:
 If user is GLUTEN-FREE:
 - Prioritize places with "gluten-free" menu mentions
 - Penalize bakeries, pasta specialists heavily
+- Highlight risky places
 
 ## 3. QUERY RELEVANCE (THIRD PRIORITY)
 User searched for: "{query}"
@@ -473,10 +553,123 @@ ${STRICT_SYSTEM_INSTRUCTION.replace('{query}', query)}
 ${hasSuperlative ? '⚠️ USER REQUESTED EXCELLENCE: The query contains superlatives like "best", "amazing", "najlepšia". APPLY STRICT QUALITY FILTERING as per section 4.' : 'Standard mode - balance quality with relevance.'}
 
 # RESTAURANTS TO ANALYZE
-${JSON.stringify(placesPayload, null, 2)}
+# RESTAURANTS TO ANALYZE
+${JSON.stringify(placesPayload)}
 
 Analyze each restaurant and return the JSON array.
 `;
+}
+
+export async function scorePlacesWithDeepContext(
+    places: PlaceWithContext[],
+    userProfile: any,
+    currentQuery: string | null = null
+): Promise<Map<string, GeminiScore>> {
+    const startTime = Date.now();
+
+    if (!places.length) return new Map();
+
+    const query = currentQuery || "General Recommendation";
+    const prompt = buildStrictPrompt(places, userProfile, query);
+
+    let timeoutId: NodeJS.Timeout | null = null;
+
+    try {
+        // ✅ NEW: Promise.race with cleanup
+        const timeoutPromise = new Promise<never>((_, reject) => {
+            timeoutId = setTimeout(() => {
+                reject(new Error('GEMINI_TIMEOUT_SCORE'));
+            }, TIMEOUT_MS);
+        });
+
+        const geminiPromise = retryOperation(() => model.generateContent(prompt));
+
+        const result = await Promise.race([geminiPromise, timeoutPromise]);
+
+        // ✅ Clear timeout on success
+        if (timeoutId) clearTimeout(timeoutId);
+
+        const response = await result.response;
+        const text = response.text();
+
+        // ✅ Track usage
+        const metadata = await response.usageMetadata;
+        if (metadata) {
+            await logGeminiUsage({
+                operation: 'score',
+                tokensUsed: metadata.totalTokenCount || 0,
+                candidateCount: places.length,
+                success: true,
+                latencyMs: Date.now() - startTime,
+                cost: calculateCost(metadata.totalTokenCount || 0),
+                timestamp: new Date()
+            });
+        }
+
+        // ✅ IMPROVED: Safe parsing
+        let parsedJson: any;
+        try {
+            const jsonStr = text.replace(/```json\n?|\n?```/g, "").trim();
+            parsedJson = JSON.parse(jsonStr);
+        } catch (parseError) {
+            console.error('[Gemini] JSON parse failed:', text.substring(0, 200));
+            return generateFallbackScores(places, 'error');
+        }
+
+        const parseResult = GeminiResponseSchema.safeParse(parsedJson);
+
+        if (!parseResult.success) {
+            console.error("[Gemini] Validation failed:", parseResult.error);
+            return convertToGeminiScores(places, parsedJson);
+        }
+
+        const strictScores = parseResult.data;
+        const results = new Map<string, GeminiScore>();
+
+        places.forEach((p) => {
+            const score = strictScores.find(s => s.id === p.place_id);
+            if (score) {
+                results.set(p.place_id, {
+                    matchScore: score.matchScore,
+                    relevanceScore: score.relevanceScore,
+                    safetyFlag: score.safetyFlag,
+                    shortReason: score.shortReason,
+                    recommendedDish: score.recommendedDish || "",
+                    pros: score.pros,
+                    cons: score.cons,
+                    warnings: score.warnings,
+                    warning: score.safetyFlag
+                });
+            }
+        });
+
+        return results;
+
+    } catch (error: any) {
+        // ✅ Clear timeout on error
+        if (timeoutId) clearTimeout(timeoutId);
+
+        console.error("[Gemini] Scoring error:", error.message);
+
+        // ✅ Log failure
+        await logGeminiUsage({
+            operation: 'score',
+            tokensUsed: 0,
+            candidateCount: places.length,
+            success: false,
+            latencyMs: Date.now() - startTime,
+            cost: 0,
+            timestamp: new Date()
+        });
+
+        // ✅ Return fallback scores
+        if (error.message?.includes('TIMEOUT')) {
+            console.warn('[Gemini] Timeout - returning fallback scores');
+            return generateFallbackScores(places, 'timeout');
+        }
+
+        return generateFallbackScores(places, 'error');
+    }
 }
 
 /**
@@ -495,75 +688,6 @@ function filterSafeResults(
         .sort((a, b) => b.matchScore - a.matchScore)
         // Top 10 results
         .slice(0, 10);
-}
-
-/**
- * Advanced Scoring with Deep Context + Strict Safety Filtering
- * @param places - Places with reviews and summaries
- * @param userProfile - User preferences including allergies and dietary
- * @param currentQuery - Search query for relevance matching
- * @returns Map of place_id to GeminiScore
- */
-export async function scorePlacesWithDeepContext(
-    places: PlaceWithContext[],
-    userProfile: any,
-    currentQuery: string | null = null
-): Promise<Map<string, GeminiScore>> {
-    if (!places.length) return new Map();
-
-    const query = currentQuery || "General Recommendation";
-    const prompt = buildStrictPrompt(places, userProfile, query);
-
-    try {
-        const result = await retryOperation(() => model.generateContent(prompt));
-        const response = await result.response;
-        const text = response.text();
-
-        // Clean markdown artifacts
-        const jsonStr = text.replace(/```json\n?|\n?```/g, "").trim();
-
-        // Parse and validate with Zod
-        const parseResult = GeminiResponseSchema.safeParse(JSON.parse(jsonStr));
-
-        if (!parseResult.success) {
-            console.error("[Gemini] Validation failed:", parseResult.error);
-            // Fallback: Try lenient parsing
-            const scores: any[] = JSON.parse(jsonStr);
-            return convertToGeminiScores(places, scores);
-        }
-
-        const strictScores = parseResult.data;
-
-        // Apply safety filtering
-        const safeScores = filterSafeResults(strictScores, 60);
-
-        console.log(`[Gemini] Filtered ${strictScores.length} → ${safeScores.length} safe results`);
-
-        // Convert to Map<place_id, GeminiScore>
-        const results = new Map<string, GeminiScore>();
-
-        places.forEach((p) => {
-            const score = strictScores.find(s => s.id === p.place_id);
-            if (score) {
-                results.set(p.place_id, {
-                    matchScore: score.matchScore,
-                    relevanceScore: score.relevanceScore,
-                    safetyFlag: score.safetyFlag,
-                    shortReason: score.shortReason,
-                    recommendedDish: score.recommendedDish || "",
-                    pros: score.pros,
-                    cons: score.cons,
-                    warnings: score.warnings,
-                    warning: score.safetyFlag // Map safetyFlag to warning for compatibility
-                });
-            }
-        });
-
-        return results;
-    } catch (error) {
-        console.error("[Gemini] Strict Scoring Error:", error);
-        return new Map();
-    }
 }
 
 /**
@@ -592,4 +716,36 @@ function convertToGeminiScores(
     });
 
     return results;
+}
+
+/**
+ * Generates a friendly "No Exact Match" discovery message in Slovak.
+ */
+export async function generateDiscoveryMessage(
+    keyword: string,
+    availableCategories: string[],
+    userProfile: any
+): Promise<string> {
+    const prompt = `
+    Role: Friendly local guide "Nearspotty".
+    Language: Strictly English.
+    Situation: User searched for "${keyword}" but we found NO exact matches nearby.
+    Available places have these categories: ${availableCategories.join(', ')}.
+    User Profile: ${JSON.stringify(userProfile)}
+
+    Task: Write a short, helpful message (max 2 sentences).
+    1. Acknowledge we couldn't find specific "${keyword}".
+    2. Suggest an alternative from available categories based on user profile OR suggest increasing radius.
+    3. Be distinct but polite.
+
+    Example output: "We couldn't find any ${keyword} nearby, but based on your love for Asian cuisine, you might enjoy these Thai alternatives."
+    `;
+
+    try {
+        const result = await retryOperation(() => model.generateContent(prompt));
+        return result.response.text();
+    } catch (e) {
+        console.error("Discovery Message Error:", e);
+        return `We couldn't find any "${keyword}" in this area. Try increasing the search radius or look for other businesses nearby.`;
+    }
 }

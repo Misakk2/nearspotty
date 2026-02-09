@@ -47,7 +47,6 @@ export default function ForRestaurantsPage() {
                 "UNLIMITED reservations",
                 "AI menu optimization insights",
                 "Advanced analytics",
-                "Priority listing",
                 "Customer dietary dashboard",
                 "Email + SMS notifications",
                 "€1.00 per-cover fee"

@@ -1,159 +1,411 @@
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
 import { getAdminDb } from "@/lib/firebase-admin";
+import { getTierFromPriceId } from "@/lib/plan-limits";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
     apiVersion: "2026-01-28.clover",
 });
 
+// Use Node.js runtime (required for Firebase Admin SDK)
+// Raw body access works via request.text() in Next.js 15 App Router
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
+if (!process.env.STRIPE_WEBHOOK_SECRET) {
+    console.error("🚨 FATAL: STRIPE_WEBHOOK_SECRET is missing from environment variables!");
+    // We don't throw error here to avoid crashing the whole builds/server start, 
+    // but this route will definitely fail.
+}
+
+
+
+
+// Helper to determine Role/Tier from Price Object (if ID fails)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function deriveRoleFromPriceData(price: any): { role: 'diner' | 'owner', tier: 'free' | 'premium' | 'basic' | 'pro' | 'enterprise' } {
+    if (!price) return { role: 'diner', tier: 'free' };
+
+    // Check nickname for keywords
+    const nickname = (price.nickname || '').toLowerCase();
+
+    if (nickname.includes('enterprise')) return { role: 'owner', tier: 'enterprise' };
+    if (nickname.includes('pro') || nickname.includes('business')) return { role: 'owner', tier: 'pro' };
+    if (nickname.includes('basic') || nickname.includes('starter')) return { role: 'owner', tier: 'basic' };
+    if (nickname.includes('premium') || nickname.includes('diner')) return { role: 'diner', tier: 'premium' };
+
+    // Fallback based on amount (Heuristic)
+    const amount = price.unit_amount || 0;
+
+    // Limits:
+    // Enterprise: usually > €100 (10000)
+    // Pro: usually €79 (7900)
+    // Basic: usually €29 (2900)
+    // Diner Premium: usually €9.99 (999)
+
+    if (amount >= 15000) return { role: 'owner', tier: 'enterprise' }; // > €150
+    if (amount >= 6000) return { role: 'owner', tier: 'pro' };        // > €60
+    if (amount >= 2000) return { role: 'owner', tier: 'basic' };      // > €20
+    if (amount > 0) return { role: 'diner', tier: 'premium' };        // Any other paid amount -> Diner Premium
+
+    return { role: 'diner', tier: 'free' };
+}
 
 export async function POST(request: Request) {
-    // 1. Validate Secret & Signature
-    const signature = request.headers.get("stripe-signature");
-    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET!;
+    console.log('[Stripe Webhook] 🔔 Incoming webhook request');
 
-    if (!signature || !webhookSecret) {
-        console.error("❌ [Stripe Webhook] Missing signature or secret");
-        return NextResponse.json({ error: "Missing signature or secret" }, { status: 400 });
+    // =========================================================================
+
+    // 1. STRICT SECRET HANDLING (trim whitespace, validate prefix)
+    // =========================================================================
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET?.trim();
+    const signature = request.headers.get("stripe-signature");
+
+    // Security logs (safe - no secret exposure)
+    console.log('[Stripe Webhook] 🔐 Security Check:');
+    console.log('  - Secret loaded:', webhookSecret ? 'YES' : 'NO');
+    console.log('  - Secret length:', webhookSecret?.length || 0);
+    // RESTORED DEBUG LOGGING
+    const secretSuffix = webhookSecret && webhookSecret.length > 4
+        ? webhookSecret.substring(webhookSecret.length - 4)
+        : '****';
+    console.log(`  - Secret suffix (CHECK THIS): ...${secretSuffix}`);
+    console.log('  - Has whsec_ prefix:', webhookSecret?.startsWith('whsec_') || false);
+    console.log('  - Signature present:', !!signature);
+
+    if (!webhookSecret) {
+        console.error('❌ [Stripe Webhook] CRITICAL: STRIPE_WEBHOOK_SECRET not found in environment');
+        return NextResponse.json({ error: "Webhook secret not configured" }, { status: 500 });
     }
 
+    if (!webhookSecret.startsWith('whsec_')) {
+        console.error('❌ [Stripe Webhook] CRITICAL: Secret does not have whsec_ prefix - check Secret Manager');
+        return NextResponse.json({ error: "Invalid webhook secret format" }, { status: 500 });
+    }
+
+    if (!signature) {
+        console.error('❌ [Stripe Webhook] Missing stripe-signature header');
+        return NextResponse.json({ error: "Missing signature header" }, { status: 400 });
+    }
+
+    // =========================================================================
+    // 2. RAW BUFFER HANDLING (Stripe Documentation Best Practice)
+    // Using arrayBuffer() instead of text() to prevent any encoding changes
+    // =========================================================================
     let event: Stripe.Event;
 
     try {
-        const body = await request.text();
-        event = stripe.webhooks.constructEvent(body, signature, webhookSecret);
-        console.log(`[Stripe Webhook] 🔔 Webhook Verified. Event: ${event.type}`);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } catch (err: any) {
-        console.error(`❌ [Stripe Webhook] Signature Verification Failed: ${err.message}`);
-        return NextResponse.json({ error: `Webhook Error: ${err.message}` }, { status: 400 });
+        // CRITICAL: Get raw body as Buffer - no text encoding issues
+        const arrayBuffer = await request.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+
+        console.log('[Stripe Webhook] 📦 Payload received:');
+        console.log('  - Buffer length:', buffer.length, 'bytes');
+        console.log('  - Signature start:', signature.substring(0, 25) + '...');
+
+        // Stripe SDK handles Buffer natively - most reliable method
+        event = stripe.webhooks.constructEvent(buffer, signature, webhookSecret);
+
+        console.log(`[Stripe Webhook] ✅ Signature verified! Event: ${event.type}`);
+    } catch (err: unknown) {
+        const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+        console.error(`❌ [Stripe Webhook] Signature Verification FAILED:`);
+        console.error(`  - Error: ${errorMessage}`);
+        console.error(`  - Hint: Verify STRIPE_WEBHOOK_SECRET matches Stripe Dashboard exactly`);
+        return NextResponse.json({
+            error: "Signature verification failed",
+            hint: "Check webhook secret in Secret Manager vs Stripe Dashboard"
+        }, { status: 400 });
     }
 
     console.log(`[Stripe Webhook] ➡️  Event Type: ${event.type}`);
 
     // --- IDEMPOTENCY CHECK ---
-    const eventRef = getAdminDb().collection('webhook_events').doc(event.id);
-    const eventDoc = await eventRef.get();
-    if (eventDoc.exists) {
-        console.log(`[Stripe Webhook] ⚠️ Event ${event.id} already processed. Skipping.`);
-        return NextResponse.json({ received: true });
+    // --- IDEMPOTENCY CHECK (TRANSACTIONAL) ---
+    const db = getAdminDb();
+    const eventRef = db.collection('webhook_events').doc(event.id);
+
+    try {
+        await db.runTransaction(async (t) => {
+            const doc = await t.get(eventRef);
+            if (doc.exists) {
+                throw new Error("EVENT_EXISTS");
+            }
+            t.set(eventRef, {
+                processedAt: new Date().toISOString(),
+                type: event.type
+            });
+        });
+    } catch (err: unknown) {
+        if (err instanceof Error && err.message === "EVENT_EXISTS") {
+            console.log(`[Stripe Webhook] ⚠️ Event ${event.id} already processed. Skipping.`);
+            return NextResponse.json({ received: true });
+        }
+        console.error(`[Stripe Webhook] ❌ Idempotency Transaction Failed:`, err);
+        return NextResponse.json({ error: "Idempotency check failed" }, { status: 500 });
     }
-    await eventRef.set({ processedAt: new Date().toISOString(), type: event.type });
     // -------------------------
 
-    // Handle checkout.session.completed - immediate upgrade
+    // --- IGNORE NOISY EVENTS ---
+    const IGNORED_EVENTS = [
+        "invoice.created",
+        "invoice.finalized",
+        "payment_intent.created",
+        "payment_intent.succeeded",
+        "payment_intent.requires_action"
+    ];
+
+    if (IGNORED_EVENTS.includes(event.type)) {
+        return NextResponse.json({ received: true });
+    }
+
+    // Handle invoice.paid - PRIMARY RENEWAL & PAYMENT SIGNAL
+    // This fires for both initial payment AND renewals. It's the most reliable source of truth for "Active".
+    if (event.type === "invoice.paid") {
+        const invoice = event.data.object as Stripe.Invoice;
+        const customerId = invoice.customer as string;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const subscriptionId = (invoice as any).subscription as string;
+
+        console.log(`[Stripe Webhook] 💰 Invoice ${invoice.id} PAID. Customer: ${customerId}`);
+
+        try {
+            // Find user
+            const usersSnapshot = await getAdminDb().collection("users")
+                .where("stripeCustomerId", "==", customerId)
+                .limit(1)
+                .get();
+
+            if (!usersSnapshot.empty) {
+                const userRef = usersSnapshot.docs[0].ref;
+
+                // ✅ RETRIEVE SUBSCRIPTION TO GET STATUS AND DATES AND PRICE ID
+                let subscriptionStatus: Stripe.Subscription.Status = 'active';
+                let currentPeriodEnd: string | null = null;
+                let priceId: string | undefined = undefined;
+
+                if (subscriptionId) {
+                    try {
+                        const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+                        subscriptionStatus = subscription.status;
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        currentPeriodEnd = new Date((subscription as any).current_period_end * 1000).toISOString();
+
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        priceId = (subscription as any).items?.data?.[0]?.price?.id;
+                    } catch (subError) {
+                        console.error(`[Stripe Webhook] ⚠️ Could not retrieve subscription ${subscriptionId}:`, subError);
+                    }
+                }
+
+                // Fallback: try to get from invoice lines using heuristic
+                if (!priceId) {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    priceId = (invoice.lines.data[0] as any)?.price?.id;
+                }
+
+                if (!currentPeriodEnd) {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    const periodEnd = (invoice.lines.data[0] as any)?.period?.end;
+                    if (periodEnd) currentPeriodEnd = new Date(periodEnd * 1000).toISOString();
+                }
+
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const priceData = (invoice.lines.data[0] as any)?.price;
+                let { role, tier } = getTierFromPriceId(priceId || '');
+
+                if (tier === 'free' && priceData) {
+                    const derived = deriveRoleFromPriceData(priceData);
+                    if (derived.tier !== 'free') {
+                        role = derived.role;
+                        tier = derived.tier;
+                    }
+                }
+
+                console.log(`[Stripe Webhook] 📝 Updating User via Transaction: Role=${role}, Tier=${tier}`);
+
+                // 🔐 ATOMIC TRANSACTION for Subscription Update
+                await getAdminDb().runTransaction(async (transaction) => {
+                    const userDoc = await transaction.get(userRef);
+                    if (!userDoc.exists) throw new Error("User not found during transaction");
+
+                    transaction.set(userRef, {
+                        role: role,
+                        tier: tier, // ✅ SYNC: Write to root for backward compatibility
+                        subscription: {
+                            status: subscriptionStatus,
+                            tier: tier,
+                            stripeSubscriptionId: subscriptionId,
+                            currentPeriodEnd: currentPeriodEnd,
+                        },
+                        credits: {
+                            remaining: -1,
+                            used: 0,
+                            resetDate: new Date().toISOString(),
+                            limit: -1
+                        },
+                        updatedAt: new Date().toISOString()
+                    }, { merge: true });
+                });
+
+                console.log(`✅ [Stripe Webhook] Transaction Commit: User updated to ${tier}`);
+
+            } else {
+                console.warn(`[Stripe Webhook] ⚠️ No user found for customer: ${customerId} (invoice.paid)`);
+            }
+        } catch (error) {
+            console.error(`[Stripe Webhook] ❌ Error processing invoice.paid:`, error);
+            return NextResponse.json({ error: "Invoice processing failed" }, { status: 500 });
+        }
+    }
+
+    // Handle checkout.session.completed - IMMEDIATE FULFILLMENT & CLAIMING
     if (event.type === "checkout.session.completed") {
         try {
             const session = event.data.object as Stripe.Checkout.Session;
             const userId = session.client_reference_id;
 
             console.log(`[Stripe Webhook] Processing checkout.session.completed for Session ID: ${session.id}`);
-            console.log(`[Stripe Webhook] Client Reference ID (User ID): ${userId}`);
 
             if (userId) {
-                const role = session.metadata?.role || "premium";
                 const plan = session.metadata?.plan || "premium";
+                const placeIdToClaim = session.metadata?.placeId; // CLAIM LOGIC
 
-                console.log(`[Stripe Webhook] Fulfilling order for user: ${userId} as ${role} (${plan})`);
+                console.log(`[Stripe Webhook] Fulfilling order for user: ${userId}. Place Claim: ${placeIdToClaim || 'None'}`);
 
-                // Fetch subscription to get correct period end
+                // ... [Existing Date Calculation Logic] ...
                 let currentPeriodEnd = new Date();
                 let status: Stripe.Subscription.Status = "active";
                 let cancelAtPeriodEnd = false;
                 let cancelAt: string | null = null;
                 let subscriptionId = '';
 
+                let derivedRole: 'diner' | 'owner' = 'diner';
+                let derivedTier: 'free' | 'premium' | 'basic' | 'pro' | 'enterprise' = 'premium'; // Default to premium to be safe for paid users
+
+                // Retrieve Subscription to get Price ID
                 if (session.subscription) {
                     subscriptionId = typeof session.subscription === 'string' ? session.subscription : session.subscription.id;
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    const subscription = await stripe.subscriptions.retrieve(subscriptionId) as any;
+                    try {
+                        const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
+                            expand: ['items.data.price']
+                        }) as any; // eslint-disable-line @typescript-eslint/no-explicit-any
 
-                    // Safe Date Parsing
-                    if (subscription.current_period_end) {
-                        const parsedDate = new Date(subscription.current_period_end * 1000);
-                        if (!isNaN(parsedDate.getTime())) {
-                            currentPeriodEnd = parsedDate;
+                        console.log(`[Stripe Webhook] Retrieved Subscription: ${subscriptionId}`);
+
+                        if (subscription.items?.data?.[0]?.price) {
+                            const priceData = subscription.items.data[0].price;
+                            const priceId = priceData.id;
+                            console.log(`[Stripe Webhook] Found Price ID: ${priceId}`);
+
+                            // Try exact match first
+                            const roleTier = getTierFromPriceId(priceId);
+                            console.log(`[Stripe Webhook] Exact Match Result:`, roleTier);
+
+                            if (roleTier.tier !== 'free') {
+                                derivedRole = roleTier.role;
+                                derivedTier = roleTier.tier;
+                            } else {
+                                // Fallback: If exact match failed (returned free/diner), try heuristic
+                                console.log(`[Stripe Webhook] Exact match returned 'free' for paid subscription. Trying heuristic...`);
+                                const heuristic = deriveRoleFromPriceData(priceData);
+                                console.log(`[Stripe Webhook] Heuristic Result:`, heuristic);
+
+                                if (heuristic.tier !== 'free') {
+                                    derivedRole = heuristic.role;
+                                    derivedTier = heuristic.tier;
+                                } else {
+                                    // FINAL SAFETY NET: If we have a paid subscription but can't map it, 
+                                    // assume it's at least the plan they CLAIMED it was in metadata.
+                                    console.warn(`[Stripe Webhook] ⚠️ Could not map Price ID ${priceId} to any tier. Using metadata plan: ${plan}`);
+                                    if (plan.includes('basic')) { derivedRole = 'owner'; derivedTier = 'basic'; }
+                                    else if (plan.includes('pro')) { derivedRole = 'owner'; derivedTier = 'pro'; }
+                                    else if (plan.includes('enterprise')) { derivedRole = 'owner'; derivedTier = 'enterprise'; }
+                                    else { derivedRole = 'diner'; derivedTier = 'premium'; }
+                                }
+                            }
                         } else {
-                            console.warn("⚠️ [Stripe Webhook] Invalid current_period_end received, using fallback.");
-                            currentPeriodEnd = new Date();
-                            currentPeriodEnd.setMonth(currentPeriodEnd.getMonth() + 1);
+                            console.error(`[Stripe Webhook] ❌ Subscription ${subscriptionId} has no price data in items.`);
                         }
-                    } else {
-                        // Fallback to now + 30 days if somehow missing
-                        currentPeriodEnd = new Date();
-                        currentPeriodEnd.setMonth(currentPeriodEnd.getMonth() + 1);
+
+                        if (subscription.current_period_end) {
+                            currentPeriodEnd = new Date(subscription.current_period_end * 1000);
+                        }
+                        status = subscription.status;
+                        cancelAtPeriodEnd = subscription.cancel_at_period_end;
+                        if (subscription.cancel_at) {
+                            cancelAt = new Date(subscription.cancel_at * 1000).toISOString();
+                        }
+                    } catch (subError) {
+                        console.error(`[Stripe Webhook] ❌ Error retrieving subscription ${subscriptionId}:`, subError);
+                        // Fallback to metadata plan if subscription fetch fails
+                        if (plan.includes('basic')) { derivedRole = 'owner'; derivedTier = 'basic'; }
+                        else if (plan.includes('pro')) { derivedRole = 'owner'; derivedTier = 'pro'; }
+                        else if (plan.includes('enterprise')) { derivedRole = 'owner'; derivedTier = 'enterprise'; }
                     }
-
-                    status = subscription.status;
-                    cancelAtPeriodEnd = subscription.cancel_at_period_end;
-
-                    console.log(`[Stripe Webhook] 📋 Subscription Details found: ID=${subscriptionId}, Status=${status}, CancelAtPeriodEnd=${cancelAtPeriodEnd}`);
-
-                    if (subscription.cancel_at) {
-                        cancelAt = new Date(subscription.cancel_at * 1000).toISOString();
-                    }
-                    console.log(`[Stripe Webhook] Retrieved Subscription: ${subscriptionId}, Status: ${status}`);
                 } else {
-                    // One-time payment fallback (add 30 days if needed, or lifetime)
                     currentPeriodEnd.setMonth(currentPeriodEnd.getMonth() + 1);
-                    console.log(`[Stripe Webhook] One-time payment, setting period end to +1 month`);
                 }
 
-                console.log(`[Stripe Webhook] 🔄 Attempting Firestore Update for User ${userId}...`);
-                console.log(`[Stripe Webhook] Data Payload (Plan: ${plan}, Tier: premium, Status: ${status})`);
+                console.log(`[Stripe Webhook] Final Decision -> User: ${userId}, Role: ${derivedRole}, Tier: ${derivedTier}`);
 
-                // CRITICAL FIX: Atomic Premium Activation
-                // Single atomic write ensures immediate tier activation + unlimited credits
-                await getAdminDb().collection("users").doc(userId).set({
-                    // ✅ Immediate tier activation (single source of truth)
-                    tier: 'premium',
+                // ATOMIC WRITE
+                const userRef = getAdminDb().collection("users").doc(userId);
 
-                    // ✅ Subscription details
+                await userRef.set({
+                    role: derivedRole,
+                    tier: derivedTier, // ✅ SYNC: Write to root for backward compatibility
+                    stripeCustomerId: session.customer as string, // ✅ TOP-LEVEL for invoice.paid lookup & dashboard
                     subscription: {
-                        status: status,
-                        tier: 'premium',
-                        plan: plan,
+                        status: status, // likely 'active' or 'trialing'
+                        tier: derivedTier,
                         stripeSubscriptionId: subscriptionId,
-                        stripeCustomerId: session.customer as string,
                         currentPeriodEnd: currentPeriodEnd.toISOString(),
                         cancelAtPeriodEnd: cancelAtPeriodEnd,
-                        cancelAt: cancelAt,
-                        updatedAt: new Date().toISOString()
+                        cancelAt: cancelAt
                     },
-
-                    // ✅ Initialize unlimited credits
                     credits: {
-                        remaining: -1,  // -1 = unlimited for premium
+                        remaining: -1,
                         used: 0,
                         resetDate: new Date().toISOString(),
                         limit: -1
                     },
-
-                    // ✅ Metadata
                     updatedAt: new Date().toISOString()
                 }, { merge: true });
 
-                console.log(`✅ [Stripe Webhook] SUCCESS: User ${userId} updated in Firestore.`);
-                console.log(`[Stripe Webhook] User ${userId} upgraded to ${plan} until ${currentPeriodEnd.toISOString()}`);
-            } else {
-                console.error("❌ [Stripe Webhook] ERROR: checkout.session.completed missing client_reference_id. Cannot link to user.");
+                // HANDLE CLAIMING IF PLACE ID PRESENT
+                if (placeIdToClaim) {
+                    console.log(`[Stripe Webhook] 🏠 Auto-claiming place ${placeIdToClaim} for user ${userId}`);
+                    const placeRef = getAdminDb().collection("restaurants").doc(placeIdToClaim);
+                    await placeRef.set({
+                        isClaimed: true,
+                        ownerId: userId,
+                        claimedAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString()
+                    }, { merge: true });
+
+                    // Update User Role to Owner
+                    console.log(`[Stripe Webhook] 👑 Promoting user ${userId} to 'owner'`);
+                    await userRef.set({
+                        role: 'owner' // Ensure role is owner if they claimed a place
+                    }, { merge: true });
+                }
+
+                console.log(`✅ [Stripe Webhook] SUCCESS: User ${userId} upgraded.`);
             }
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (err: any) {
-            console.error("❌ [Stripe Webhook] CRITICAL ERROR in checkout.session.completed handler:");
-            console.error(err);
-            return NextResponse.json({ error: "Webhook Handler Failed", details: err.message }, { status: 500 });
+            console.error("❌ [Stripe Webhook] CRITICAL ERROR in checkout.session.completed:", err);
+            return NextResponse.json({ error: "Webhook Handler Failed" }, { status: 500 });
         }
     }
 
-    // Handle subscription.updated - for plan changes, renewals, and soft-cancels
+    // Handle subscription.updated
     if (event.type === "customer.subscription.updated") {
         const subscription = event.data.object as Stripe.Subscription;
         const customerId = subscription.customer as string;
 
         try {
-            // Find user by stripeCustomerId
             const usersSnapshot = await getAdminDb().collection("users")
                 .where("stripeCustomerId", "==", customerId)
                 .limit(1)
@@ -162,54 +414,83 @@ export async function POST(request: Request) {
             if (!usersSnapshot.empty) {
                 const userDoc = usersSnapshot.docs[0];
                 const status = subscription.status;
-                const isActive = status === 'active' || status === 'trialing';
 
-                // Handle soft-cancel: cancel_at_period_end means user canceled but retains access
-                const cancelAtPeriodEnd = subscription.cancel_at_period_end;
-                const cancelAt = subscription.cancel_at
-                    ? new Date(subscription.cancel_at * 1000).toISOString()
-                    : null;
+                // Logic:
+                // - active/trialing: Premium
+                // - past_due: Grace Period (Premium)
+                // - unpaid/incomplete_expired: Downgrade (Free)
+                // - canceled: Downgrade (Free) - usually handled by deleted event, but good to catch here too
+
+                const isPremiumStatus = ['active', 'trialing'].includes(status);
+                const isGracePeriod = status === 'past_due';
+
+                console.log(`[Stripe Webhook] Sub Update for ${userDoc.id}. Status: ${status}`);
+
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                const currentPeriodEnd = new Date((subscription as unknown as { current_period_end: number }).current_period_end * 1000).toISOString();
+                const priceId = (subscription.items.data[0] as any)?.price?.id;
+                const { role, tier } = getTierFromPriceId(priceId);
 
-                // User keeps premium access until period end even if they've canceled, unless status is not active/trialing (e.g. unpaid)
-                // If status is 'past_due', we might still want to show them as premium for a grace period, but standard logic is usually strictly based on active status.
-                // However, the requirement says "Updated data structure... subscription.status = 'active'".
-                // We will rely on effectiveTier logic.
+                let effectiveTier = tier;
+                let effectiveRole = role;
+                let gracePeriodEnd: string | null = null;
 
-                const effectiveTier = (isActive) ? 'premium' : 'free';
+                if (isGracePeriod) {
+                    // 7 Days Grace Period
+                    const graceDate = new Date();
+                    graceDate.setDate(graceDate.getDate() + 7);
+                    gracePeriodEnd = graceDate.toISOString();
+                    console.log(`[Stripe Webhook] ⚠️ User entering GRACE PERIOD until ${gracePeriodEnd}`);
+                } else if (!isPremiumStatus) {
+                    // Hard Downgrade
+                    effectiveTier = 'free';
+                    effectiveRole = 'diner';
+                    console.log(`[Stripe Webhook] 📉 Downgrading user due to status: ${status}`);
+                }
+
+                // Safety: If tier logic returns free but we are active, keep free (or should we upgrade? logic above handles upgrades via priceId)
+                // If tier checks returns premium but status is NOT active/grace, force free.
+                if (effectiveTier !== 'free' && !isPremiumStatus && !isGracePeriod) {
+                    effectiveTier = 'free';
+                    effectiveRole = 'diner';
+                }
+
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const currentPeriodEnd = new Date((subscription as any).current_period_end * 1000).toISOString();
 
                 await userDoc.ref.set({
-                    tier: effectiveTier,
+                    role: effectiveRole,
+                    tier: effectiveTier, // ✅ SYNC: Write to root for backward compatibility
                     subscription: {
                         status: status,
                         tier: effectiveTier,
-                        plan: effectiveTier,
                         stripeSubscriptionId: subscription.id,
                         currentPeriodEnd: currentPeriodEnd,
-                        cancelAtPeriodEnd: cancelAtPeriodEnd,
-                        cancelAt: cancelAt,
-                        updatedAt: new Date().toISOString()
+                        cancelAtPeriodEnd: subscription.cancel_at_period_end,
+                        gracePeriodEnd: gracePeriodEnd
                     },
                     credits: {
-                        remaining: effectiveTier === 'premium' ? -1 : 5,
-                        used: 0,
-                        resetDate: new Date().toISOString(),
-                        limit: effectiveTier === 'premium' ? -1 : 5
+                        // Only reset limit if downgrading to free. If staying premium, limit is -1.
+                        limit: effectiveTier === 'free' ? 5 : -1
                     },
                     updatedAt: new Date().toISOString()
                 }, { merge: true });
 
-                console.log(`[Stripe Webhook] User ${userDoc.id} subscription updated: ${status}, tier: ${effectiveTier}`);
-            } else {
-                console.warn(`[Stripe Webhook] No user found for customer: ${customerId} (updated)`);
             }
         } catch (error) {
             console.error("[Stripe Webhook] Subscription update error:", error);
+            // Log to failures collection
+            try {
+                await getAdminDb().collection('webhook_failures').add({
+                    eventId: event.id,
+                    type: event.type,
+                    error: error instanceof Error ? error.message : 'Unknown',
+                    timestamp: new Date().toISOString()
+                });
+            } catch (e) { console.error('Failed to log failure', e); }
         }
     }
 
-    // Handle subscription.deleted - downgrade to free
+    // Handle subscription.deleted
     if (event.type === "customer.subscription.deleted") {
         const subscription = event.data.object as Stripe.Subscription;
         const customerId = subscription.customer as string;
@@ -223,28 +504,34 @@ export async function POST(request: Request) {
             if (!usersSnapshot.empty) {
                 const userDoc = usersSnapshot.docs[0];
 
+                // Unclaim Restaurants
+                const restaurantQuery = await getAdminDb().collection("restaurants").where("ownerId", "==", userDoc.id).get();
+                if (!restaurantQuery.empty) {
+                    const batch = getAdminDb().batch();
+                    restaurantQuery.docs.forEach(doc => {
+                        batch.set(doc.ref, {
+                            isClaimed: false,
+                            ownerId: null,
+                            claimRemovedAt: new Date().toISOString()
+                        }, { merge: true });
+                    });
+                    await batch.commit();
+                }
+
                 await userDoc.ref.set({
-                    tier: "free",
+                    role: "diner", // Downgrade role too? Yes, if strict.
+                    tier: "free", // ✅ SYNC: Write to root for backward compatibility
                     subscription: {
                         status: "canceled",
                         tier: "free",
-                        plan: "free",
-                        currentPeriodEnd: new Date().toISOString(),
-                        cancelAtPeriodEnd: false,
-                        updatedAt: new Date().toISOString()
                     },
                     credits: {
-                        remaining: 5,
-                        used: 0,
-                        resetDate: new Date().toISOString(),
-                        limit: 5
+                        limit: 5,
+                        remaining: 5 // Reset to free limit
                     },
                     updatedAt: new Date().toISOString()
                 }, { merge: true });
-
-                console.log(`[Stripe Webhook] User ${userDoc.id} downgraded to free (deleted)`);
-            } else {
-                console.warn(`[Stripe Webhook] No user found for customer: ${customerId} (deleted)`);
+                console.log(`[Stripe Webhook] User ${userDoc.id} fully downgraded (deleted)`);
             }
         } catch (error) {
             console.error("[Stripe Webhook] Subscription deletion error:", error);

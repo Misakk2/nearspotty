@@ -50,7 +50,8 @@ export async function checkUserLimit(userId: string): Promise<UserLimitStatus> {
     }
 
     const userData = userDoc.data()!;
-    const tier: 'free' | 'premium' = userData.tier || 'free';
+    // Priority: subscription.tier > tier > free
+    const tier: 'free' | 'premium' = userData.subscription?.tier || userData.tier || 'free';
     const credits = userData.credits || {
         remaining: tier === 'premium' ? -1 : DINER_LIMITS.free.aiChecksPerMonth,
         used: 0,
@@ -157,7 +158,8 @@ export async function reserveUserCredit(userId: string): Promise<{
             }
 
             const userData = userDoc.data()!;
-            const tier: 'free' | 'premium' = userData.tier || 'free';
+            // Priority: subscription.tier > tier > free
+            const tier: 'free' | 'premium' = userData.subscription?.tier || userData.tier || 'free';
             let credits: UserCredits = userData.credits || {
                 remaining: tier === 'premium' ? -1 : DINER_LIMITS.free.aiChecksPerMonth,
                 used: 0,
@@ -181,21 +183,32 @@ export async function reserveUserCredit(userId: string): Promise<{
 
             // Premium: always authorized
             if (tier === 'premium') {
-                transaction.update(userRef, {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const updates: any = {
                     'credits.used': (credits.used || 0) + 1,
                     updatedAt: new Date().toISOString()
-                });
+                };
+                if (credits.resetDate !== userData.credits?.resetDate) {
+                    updates['credits.resetDate'] = credits.resetDate;
+                }
+                transaction.update(userRef, updates);
 
                 return { authorized: true, tier: 'premium', remaining: -1 };
             }
 
             // Free: check if credits available
             if (credits.remaining > 0) {
-                transaction.update(userRef, {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const updates: any = {
                     'credits.remaining': credits.remaining - 1,
                     'credits.used': (credits.used || 0) + 1,
                     updatedAt: new Date().toISOString()
-                });
+                };
+                if (credits.resetDate !== userData.credits?.resetDate) {
+                    updates['credits.resetDate'] = credits.resetDate;
+                    updates['credits.limit'] = credits.limit; // Restore limit on reset
+                }
+                transaction.update(userRef, updates);
 
                 return {
                     authorized: true,
@@ -232,7 +245,8 @@ export async function refundUserCredit(userId: string): Promise<{
             }
 
             const userData = userDoc.data()!;
-            const tier: 'free' | 'premium' = userData.tier || 'free';
+            // Priority: subscription.tier > tier > free
+            const tier: 'free' | 'premium' = userData.subscription?.tier || userData.tier || 'free';
 
             // Premium users don't need refunds
             if (tier === 'premium') {

@@ -18,19 +18,22 @@ function SignupForm() {
     const router = useRouter();
     const searchParams = useSearchParams();
     const initialRole = searchParams.get("role") || "user";
-    const initialPlan = searchParams.get("plan") || "free";
+    // For owners, default to 'basic' if 'free' or missing is passed. Owners cannot be free.
+    const rawPlan = searchParams.get("plan");
+    const initialPlan = (initialRole === "owner" && (!rawPlan || rawPlan === "free")) ? "basic" : (rawPlan || "free");
     const { user, userRole, loading: authLoading } = useAuth();
     const [loading, setLoading] = useState(false);
+    const [justSignedUp, setJustSignedUp] = useState(false);
 
     // If user is already logged in and wants a specific plan, redirect accordingly
     useEffect(() => {
-        if (!authLoading && user) {
+        if (!authLoading && user && !justSignedUp) {
             // If they are an owner and clicking a plan, send to checkout directly or dashboard
             if (userRole === "owner" && initialPlan !== "free") {
                 const planToPrice: Record<string, string> = {
-                    'basic': 'price_1SqB26JCjItbR3I2jk3D6ULu',
-                    'pro': 'price_1SqB27JCjItbR3I2ZJUroRHY',
-                    'enterprise': 'price_1SqB27JCjItbR3I2rRZSNLWA'
+                    'basic': 'price_1SuvxLEOZfDm5I74RvCbvgkg',
+                    'pro': 'price_1SuvxLEOZfDm5I74QLxVBQKw',
+                    'enterprise': 'price_1SuvxMEOZfDm5I74I28E8OtJ'
                 };
                 const priceId = planToPrice[initialPlan];
                 if (priceId) {
@@ -56,7 +59,7 @@ function SignupForm() {
                 router.push("/dashboard");
             }
         }
-    }, [user, userRole, authLoading, initialPlan, router]);
+    }, [user, userRole, authLoading, initialPlan, router, justSignedUp]);
 
     const saveUser = async (user: User) => {
         // Save basic info to Firestore
@@ -78,6 +81,7 @@ function SignupForm() {
     const handleSignup = async (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
         setLoading(true);
+        setJustSignedUp(true); // Block the "already logged in" effect
         const formData = new FormData(e.currentTarget);
         const name = formData.get("name") as string;
         const email = formData.get("email") as string;
@@ -92,14 +96,26 @@ function SignupForm() {
 
             toast.success("Account created successfully!");
             // Pass role to onboarding to skip role selection for business users
-            const onboardingUrl = initialRole === "owner"
-                ? "/onboarding?role=owner"
+            let onboardingUrl = initialRole === "owner"
+                ? "/business-onboarding"
                 : "/onboarding";
+
+            if (initialRole === "owner" && initialPlan && initialPlan !== "free") {
+                onboardingUrl += `?plan=${initialPlan}`;
+            }
             router.push(onboardingUrl);
-        } catch (error: unknown) {
+
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } catch (error: any) {
             console.error(error);
-            const message = error instanceof Error ? error.message : "Failed to create account";
-            toast.error(message);
+            if (error.code === 'auth/email-already-in-use') {
+                toast.error("Email already in use. Please log in.");
+                // Optionally redirect to login?
+                // router.push("/login");
+            } else {
+                const message = error.message || "Failed to create account";
+                toast.error(message);
+            }
         } finally {
             setLoading(false);
         }
@@ -107,15 +123,21 @@ function SignupForm() {
 
     const handleGoogleSignup = async () => {
         setLoading(true);
+        setJustSignedUp(true); // Block the "already logged in" effect
         try {
             const provider = new GoogleAuthProvider();
             const result = await signInWithPopup(auth, provider);
             await saveUser(result.user);
             // Pass role to onboarding to skip role selection for business users
-            const onboardingUrl = initialRole === "owner"
-                ? "/onboarding?role=owner"
+            let onboardingUrl = initialRole === "owner"
+                ? "/business-onboarding"
                 : "/onboarding";
+
+            if (initialRole === "owner" && initialPlan && initialPlan !== "free") {
+                onboardingUrl += `?plan=${initialPlan}`;
+            }
             router.push(onboardingUrl);
+
         } catch (error: unknown) {
             console.error(error);
             const message = error instanceof Error ? error.message : "Failed to sign up with Google";

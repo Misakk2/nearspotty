@@ -344,7 +344,7 @@ export default function MobileSearch({
                             </div>
 
                             <div className="space-y-2">
-                                <Link href="/subscription" onClick={() => setIsProfileOpen(false)}>
+                                <Link href="/subscription" prefetch={false} onClick={() => setIsProfileOpen(false)}>
                                     <Button variant="outline" className="w-full justify-start gap-3 h-12 text-base font-medium rounded-xl border-gray-200">
                                         <CreditCard className="h-5 w-5 text-purple-500" />
                                         Manage Subscription
@@ -352,7 +352,9 @@ export default function MobileSearch({
                                     </Button>
                                 </Link>
 
-                                <Link href="/profile" onClick={() => setIsProfileOpen(false)}>
+
+
+                                <Link href="/profile" prefetch={false} onClick={() => setIsProfileOpen(false)}>
                                     <Button variant="outline" className="w-full justify-start gap-3 h-12 text-base font-medium rounded-xl border-gray-200">
                                         <Settings className="h-5 w-5 text-gray-500" />
                                         Preferences
@@ -374,7 +376,7 @@ export default function MobileSearch({
                     </>
                 )}
             </AnimatePresence>
-        </div>
+        </div >
     );
 }
 

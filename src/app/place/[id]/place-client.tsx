@@ -107,7 +107,12 @@ export default function PlaceDetailsClient({ place }: PlaceDetailsClientProps) {
                 )}
 
                 <div className="absolute top-4 left-4 z-10">
-                    <Button variant="secondary" size="sm" className="bg-white/90 backdrop-blur" onClick={() => router.back()}>
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        className="bg-primary text-primary-foreground hover:bg-primary/90 backdrop-blur-md shadow-sm"
+                        onClick={() => router.back()}
+                    >
                         <ArrowLeft className="h-4 w-4 mr-2" /> Back
                     </Button>
                 </div>
@@ -134,6 +139,12 @@ export default function PlaceDetailsClient({ place }: PlaceDetailsClientProps) {
                                         <MapPin className="h-4 w-4 text-white/70" />
                                         <span className="truncate max-w-[200px] md:max-w-none">{place.formatted_address}</span>
                                     </div>
+                                    {place.isClaimed && (
+                                        <div className="flex items-center gap-1 bg-primary/90 px-2 py-0.5 rounded backdrop-blur-sm text-primary-foreground text-xs font-semibold">
+                                            <CheckCircle2 className="h-3 w-3" />
+                                            Verified
+                                        </div>
+                                    )}
                                 </div>
                             </div>
 
@@ -154,7 +165,6 @@ export default function PlaceDetailsClient({ place }: PlaceDetailsClientProps) {
 
                     {/* LEFT COLUMN: Main Content */}
                     <div className="md:col-span-2 space-y-8">
-
                         {/* Tab Navigation */}
                         <div className="flex items-center gap-4 border-b overflow-x-auto pb-1 no-scrollbar">
                             <button
@@ -375,27 +385,29 @@ export default function PlaceDetailsClient({ place }: PlaceDetailsClientProps) {
                     {/* RIGHT COLUMN: Sticky Booking / Quick Info */}
                     <div className="md:col-span-1">
                         <div className="sticky top-24 space-y-4">
-                            {/* Booking Card */}
-                            <Card className="border-2 border-primary/10 shadow-lg overflow-hidden">
-                                <div className="bg-primary/5 p-3 text-center border-b border-primary/10">
-                                    <p className="text-sm font-semibold text-primary">NearSpotty Member Perk</p>
-                                </div>
-                                <CardContent className="p-6 space-y-4">
-                                    <div className="text-center">
-                                        <p className="text-gray-500 text-sm mb-1">Make a reservation</p>
-                                        <p className="text-lg font-bold text-gray-900">Reserve a Table</p>
+                            {/* Booking Card - Conditional */}
+                            {(place.isClaimed && (place.tableConfig?.bookableTables || 0) > 0) && (
+                                <Card className="border-2 border-primary/10 shadow-lg overflow-hidden">
+                                    <div className="bg-primary/5 p-3 text-center border-b border-primary/10">
+                                        <p className="text-sm font-semibold text-primary">NearSpotty Member Perk</p>
                                     </div>
+                                    <CardContent className="p-6 space-y-4">
+                                        <div className="text-center">
+                                            <p className="text-gray-500 text-sm mb-1">Make a reservation</p>
+                                            <p className="text-lg font-bold text-gray-900">Reserve a Table</p>
+                                        </div>
 
-                                    <Button size="lg" className="w-full font-bold shadow-md hover:shadow-lg transition-all" onClick={() => setIsReservationOpen(true)}>
-                                        <CalendarDays className="h-4 w-4 mr-2" />
-                                        Request Booking
-                                    </Button>
+                                        <Button size="lg" className="w-full font-bold shadow-md hover:shadow-lg transition-all" onClick={() => setIsReservationOpen(true)}>
+                                            <CalendarDays className="h-4 w-4 mr-2" />
+                                            Request Booking
+                                        </Button>
 
-                                    <p className="text-xs text-center text-muted-foreground mt-2">
-                                        Free for NearSpotty users. Instant confirmation via SMS.
-                                    </p>
-                                </CardContent>
-                            </Card>
+                                        <p className="text-xs text-center text-muted-foreground mt-2">
+                                            Free for NearSpotty users. Instant confirmation via SMS.
+                                        </p>
+                                    </CardContent>
+                                </Card>
+                            )}
 
                             {/* Location Card */}
                             <Card>
@@ -419,15 +431,17 @@ export default function PlaceDetailsClient({ place }: PlaceDetailsClientProps) {
                     </div>
                 </div>
 
-                {/* Mobile Fixed CTA */}
-                <div className="fixed bottom-0 left-0 right-0 p-4 bg-white/95 backdrop-blur border-t md:hidden z-50 flex items-center gap-3 shadow-[0_-5px_15px_-5px_rgba(0,0,0,0.1)]">
-                    <Button variant="outline" size="icon" className="shrink-0">
-                        <Share2 className="h-4 w-4" />
-                    </Button>
-                    <Button className="w-full font-bold shadow-md" onClick={() => setIsReservationOpen(true)}>
-                        Book Table
-                    </Button>
-                </div>
+                {/* Mobile Fixed CTA - Conditional */}
+                {(place.isClaimed && (place.tableConfig?.bookableTables || 0) > 0) && (
+                    <div className="fixed bottom-0 left-0 right-0 p-4 bg-white/95 backdrop-blur border-t md:hidden z-50 flex items-center gap-3 shadow-[0_-5px_15px_-5px_rgba(0,0,0,0.1)]">
+                        <Button variant="outline" size="icon" className="shrink-0">
+                            <Share2 className="h-4 w-4" />
+                        </Button>
+                        <Button className="w-full font-bold shadow-md" onClick={() => setIsReservationOpen(true)}>
+                            Book Table
+                        </Button>
+                    </div>
+                )}
 
                 <ReservationModal
                     isOpen={isReservationOpen}

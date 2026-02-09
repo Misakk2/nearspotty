@@ -49,4 +49,29 @@ export interface Place {
     price_level?: number;
     isExactMatch?: boolean;
     isGeneric?: boolean;
+
+    // Claimed Status & Managed Content
+    isClaimed?: boolean;
+    menu?: {
+        items: {
+            id: string;
+            name: string;
+            description?: string;
+            price: number;
+            weight?: string; // e.g. "300g"
+            imageUrl?: string;
+            allergens?: string[];
+            dietary?: string[]; // e.g. "vegan", "gluten-free"
+            category: string; // e.g. "Starters"
+        }[];
+    };
+    tableConfig?: {
+        totalTables: number;
+        seatsPerTable: number; // Simplified for now, can be array of tables later
+        bookableTables?: number;
+    };
+    customPhotos?: {
+        url: string;
+        category?: string;
+    }[];
 }

@@ -18,8 +18,12 @@ import { Calendar, CreditCard, LogOut, LayoutDashboard, ChevronLeft } from "luci
 const DIETARY_OPTIONS = [
     { id: "vegan", label: "Vegan" },
     { id: "vegetarian", label: "Vegetarian" },
+    { id: "paleo", label: "Paleo" },
+    { id: "keto", label: "Keto" },
     { id: "gluten-free", label: "Gluten-Free" },
     { id: "lactose-free", label: "Lactose-Free" },
+    { id: "kosher", label: "Kosher" },
+    { id: "halal", label: "Halal" },
 ];
 
 export default function ProfilePage() {
