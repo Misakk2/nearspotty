@@ -101,7 +101,7 @@ export default function BusinessDashboard() {
 
     const handlePlanChange = async (newPlan: string) => {
         if (!user) return;
-        
+
         const priceId = PLAN_TO_PRICE[newPlan];
         if (!priceId) {
             toast.error("Invalid plan selected");
@@ -109,7 +109,7 @@ export default function BusinessDashboard() {
         }
 
         // Confirm with user
-        const isDowngrade = 
+        const isDowngrade =
             (userPlan === "pro" && (newPlan === "basic" || newPlan === "free")) ||
             (userPlan === "basic" && newPlan === "free");
 
@@ -121,7 +121,7 @@ export default function BusinessDashboard() {
         }
 
         const loadingToast = toast.loading(`Changing to ${newPlan} plan...`);
-        
+
         try {
             const token = await user.getIdToken();
             const res = await fetch("/api/subscription/change-plan", {
@@ -137,17 +137,17 @@ export default function BusinessDashboard() {
             });
 
             const data = await res.json();
-            
+
             if (!res.ok) {
                 throw new Error(data.error || "Failed to change plan");
             }
 
             toast.dismiss(loadingToast);
             toast.success(data.message || `Successfully changed to ${newPlan} plan!`);
-            
+
             // Refresh page to reflect changes
             setTimeout(() => window.location.reload(), 1500);
-            
+
         } catch (error) {
             console.error("Plan change error:", error);
             toast.dismiss(loadingToast);
@@ -500,7 +500,7 @@ export default function BusinessDashboard() {
                                                 {userPlan === "free" ? "Upgrade Your Plan" : "Change Your Plan"}
                                             </CardTitle>
                                             <CardDescription>
-                                                {userPlan === "free" 
+                                                {userPlan === "free"
                                                     ? "Select a plan to unlock more features"
                                                     : "Upgrade or downgrade your subscription"}
                                             </CardDescription>

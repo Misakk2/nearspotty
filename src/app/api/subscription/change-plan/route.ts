@@ -94,7 +94,7 @@ export async function POST(request: NextRequest) {
         });
     } catch (error) {
         console.error("Change Plan Error:", error);
-        
+
         if (error instanceof Stripe.errors.StripeError) {
             return NextResponse.json(
                 { error: error.message },

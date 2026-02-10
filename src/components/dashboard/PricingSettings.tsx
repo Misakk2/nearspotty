@@ -56,9 +56,9 @@ export default function PricingSettings({
             const res = await fetch("/api/pricing/recommend", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ 
-                    location, 
-                    cuisineType: cuisine, 
+                body: JSON.stringify({
+                    location,
+                    cuisineType: cuisine,
                     avgCheckSize: avgCheck,
                     seats: seats || 50,
                     priceLevel: priceLevel || 2
@@ -225,8 +225,8 @@ export default function PricingSettings({
                             <p className="text-xs text-gray-400 italic">
                                 Based on data from {recommendation?.marketContext.similarCount} similar restaurants in {location}.
                             </p>
-                            <Button 
-                                className="rounded-full px-8 font-bold shadow-lg" 
+                            <Button
+                                className="rounded-full px-8 font-bold shadow-lg"
                                 onClick={handleApplyStrategy}
                                 disabled={saving}
                             >

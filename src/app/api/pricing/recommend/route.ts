@@ -25,9 +25,9 @@ export async function POST(request: NextRequest) {
             generationConfig: { responseMimeType: "application/json" }
         });
 
-        const priceLevelDesc = priceLevel === 4 ? "Very Expensive (€€€€)" : 
-                              priceLevel === 3 ? "Expensive (€€€)" : 
-                              priceLevel === 2 ? "Moderate (€€)" : "Inexpensive (€)";
+        const priceLevelDesc = priceLevel === 4 ? "Very Expensive (€€€€)" :
+            priceLevel === 3 ? "Expensive (€€€)" :
+                priceLevel === 2 ? "Moderate (€€)" : "Inexpensive (€)";
 
         const prompt = `You are an expert restaurant revenue manager specializing in European dining markets.
         Analyze the following restaurant profile to recommend optimal reservation deposit strategy:

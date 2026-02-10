@@ -57,7 +57,7 @@ export async function POST(request: NextRequest) {
                 if (userDoc.exists) {
                     const userData = userDoc.data();
                     const prefs = userData?.preferences || {};
-                    
+
                     if (prefs.dietary && Array.isArray(prefs.dietary)) {
                         userPreferences.dietary.push(...prefs.dietary);
                     }

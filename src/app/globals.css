@@ -6,17 +6,20 @@
   .text-balance {
     text-wrap: balance;
   }
-  
+
   /* Hide scrollbar for mobile tabs */
   .scrollbar-hide {
-    -ms-overflow-style: none;  /* IE and Edge */
-    scrollbar-width: none;  /* Firefox */
+    -ms-overflow-style: none;
+    /* IE and Edge */
+    scrollbar-width: none;
+    /* Firefox */
   }
-  
+
   .scrollbar-hide::-webkit-scrollbar {
-    display: none;  /* Chrome, Safari and Opera */
+    display: none;
+    /* Chrome, Safari and Opera */
   }
-  
+
   /* Enable smooth horizontal touch scrolling */
   .touch-pan-x {
     touch-action: pan-x;
@@ -83,6 +86,7 @@
   * {
     @apply border-border;
   }
+
   body {
     @apply bg-background text-foreground;
   }

@@ -237,7 +237,7 @@ export function MenuEditor({ placeId }: { placeId: string }) {
             // Get restaurant data to get cuisine type
             const restaurantRef = doc(db, "restaurants", placeId);
             const restaurantSnap = await getDoc(restaurantRef);
-            const cuisineType = restaurantSnap.exists() 
+            const cuisineType = restaurantSnap.exists()
                 ? (restaurantSnap.data().cuisine || "International")
                 : "International";
 
@@ -248,7 +248,7 @@ export function MenuEditor({ placeId }: { placeId: string }) {
             });
 
             const data = await res.json();
-            
+
             if (data.error) {
                 toast.error(data.error);
                 setAiSuggestionsOpen(false);
@@ -258,7 +258,7 @@ export function MenuEditor({ placeId }: { placeId: string }) {
             setAiSuggestions(data.suggestions || []);
             setAiReasoning(data.reasoning || "");
             setCustomerCount(data.customerCount || 0);
-            
+
             if (data.suggestions && data.suggestions.length > 0) {
                 toast.success("AI suggestions generated!");
             } else {
@@ -323,105 +323,105 @@ export function MenuEditor({ placeId }: { placeId: string }) {
                         {aiLoading ? "Analyzing..." : "Get AI Suggestions"}
                     </Button>
                     <Dialog open={isDialogOpen} onOpenChange={(open) => { setIsDialogOpen(open); if (!open) resetForm(); }}>
-                    <DialogTrigger asChild>
-                        <Button><Plus className="h-4 w-4 mr-2" /> Add Item</Button>
-                    </DialogTrigger>
-                    <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-                        <DialogHeader>
-                            <DialogTitle>{editingItem ? 'Edit Item' : 'Add New Item'}</DialogTitle>
-                            <DialogDescription>Add details about your dish.</DialogDescription>
-                        </DialogHeader>
+                        <DialogTrigger asChild>
+                            <Button><Plus className="h-4 w-4 mr-2" /> Add Item</Button>
+                        </DialogTrigger>
+                        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+                            <DialogHeader>
+                                <DialogTitle>{editingItem ? 'Edit Item' : 'Add New Item'}</DialogTitle>
+                                <DialogDescription>Add details about your dish.</DialogDescription>
+                            </DialogHeader>
 
-                        <div className="grid gap-4 py-4">
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="space-y-2">
-                                    <Label>Name *</Label>
-                                    <Input value={formData.name || ''} onChange={e => setFormData({ ...formData, name: e.target.value })} placeholder="Margherita Pizza" />
+                            <div className="grid gap-4 py-4">
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-2">
+                                        <Label>Name *</Label>
+                                        <Input value={formData.name || ''} onChange={e => setFormData({ ...formData, name: e.target.value })} placeholder="Margherita Pizza" />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label>Price (€) *</Label>
+                                        <Input type="number" value={formData.price || ''} onChange={e => setFormData({ ...formData, price: Number(e.target.value) })} placeholder="12.50" />
+                                    </div>
                                 </div>
-                                <div className="space-y-2">
-                                    <Label>Price (€) *</Label>
-                                    <Input type="number" value={formData.price || ''} onChange={e => setFormData({ ...formData, price: Number(e.target.value) })} placeholder="12.50" />
-                                </div>
-                            </div>
 
-                            <div className="space-y-2">
-                                <Label>Description</Label>
-                                <Textarea value={formData.description || ''} onChange={e => setFormData({ ...formData, description: e.target.value })} placeholder="Tomato sauce, mozzarella, basil..." />
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-4">
                                 <div className="space-y-2">
-                                    <Label>Category *</Label>
-                                    <Select value={formData.category} onValueChange={(val: string) =>
-                                        setFormData({ ...formData, category: val })
-                                    }>
-                                        <SelectTrigger><SelectValue /></SelectTrigger>
-                                        <SelectContent>
-                                            {CATEGORIES.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
-                                        </SelectContent>
-                                    </Select>
+                                    <Label>Description</Label>
+                                    <Textarea value={formData.description || ''} onChange={e => setFormData({ ...formData, description: e.target.value })} placeholder="Tomato sauce, mozzarella, basil..." />
                                 </div>
-                                <div className="space-y-2">
-                                    <Label>Weight/Portion (optional)</Label>
-                                    <Input value={formData.weight || ''} onChange={e => setFormData({ ...formData, weight: e.target.value })} placeholder="350g / 0.3l" />
-                                </div>
-                            </div>
 
-                            <div className="space-y-2">
-                                <Label>Image</Label>
-                                <div className="flex items-center gap-4">
-                                    {formData.imageUrl && (
-                                        <>
-                                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                                            <img src={formData.imageUrl} alt="Preview" className="h-16 w-16 object-cover rounded-md border" />
-                                        </>
-                                    )}
-                                    <div className="flex-1">
-                                        <Input type="file" accept="image/*" onChange={handleImageUpload} disabled={uploadingImage} />
-                                        {uploadingImage && <p className="text-xs text-muted-foreground mt-1">Uploading...</p>}
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-2">
+                                        <Label>Category *</Label>
+                                        <Select value={formData.category} onValueChange={(val: string) =>
+                                            setFormData({ ...formData, category: val })
+                                        }>
+                                            <SelectTrigger><SelectValue /></SelectTrigger>
+                                            <SelectContent>
+                                                {CATEGORIES.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label>Weight/Portion (optional)</Label>
+                                        <Input value={formData.weight || ''} onChange={e => setFormData({ ...formData, weight: e.target.value })} placeholder="350g / 0.3l" />
+                                    </div>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <Label>Image</Label>
+                                    <div className="flex items-center gap-4">
+                                        {formData.imageUrl && (
+                                            <>
+                                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                <img src={formData.imageUrl} alt="Preview" className="h-16 w-16 object-cover rounded-md border" />
+                                            </>
+                                        )}
+                                        <div className="flex-1">
+                                            <Input type="file" accept="image/*" onChange={handleImageUpload} disabled={uploadingImage} />
+                                            {uploadingImage && <p className="text-xs text-muted-foreground mt-1">Uploading...</p>}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <Label>Allergens</Label>
+                                    <div className="flex flex-wrap gap-2">
+                                        {ALLERGENS.map(allergen => (
+                                            <Badge
+                                                key={allergen}
+                                                variant={formData.allergens?.includes(allergen) ? "default" : "outline"}
+                                                className="cursor-pointer select-none"
+                                                onClick={() => toggleSelection('allergens', allergen)}
+                                            >
+                                                {allergen}
+                                            </Badge>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <Label>Dietary</Label>
+                                    <div className="flex flex-wrap gap-2">
+                                        {DIETARY.map(diet => (
+                                            <Badge
+                                                key={diet}
+                                                variant={formData.dietary?.includes(diet) ? "secondary" : "outline"}
+                                                className="cursor-pointer select-none"
+                                                onClick={() => toggleSelection('dietary', diet)}
+                                            >
+                                                {diet}
+                                            </Badge>
+                                        ))}
                                     </div>
                                 </div>
                             </div>
 
-                            <div className="space-y-2">
-                                <Label>Allergens</Label>
-                                <div className="flex flex-wrap gap-2">
-                                    {ALLERGENS.map(allergen => (
-                                        <Badge
-                                            key={allergen}
-                                            variant={formData.allergens?.includes(allergen) ? "default" : "outline"}
-                                            className="cursor-pointer select-none"
-                                            onClick={() => toggleSelection('allergens', allergen)}
-                                        >
-                                            {allergen}
-                                        </Badge>
-                                    ))}
-                                </div>
-                            </div>
-
-                            <div className="space-y-2">
-                                <Label>Dietary</Label>
-                                <div className="flex flex-wrap gap-2">
-                                    {DIETARY.map(diet => (
-                                        <Badge
-                                            key={diet}
-                                            variant={formData.dietary?.includes(diet) ? "secondary" : "outline"}
-                                            className="cursor-pointer select-none"
-                                            onClick={() => toggleSelection('dietary', diet)}
-                                        >
-                                            {diet}
-                                        </Badge>
-                                    ))}
-                                </div>
-                            </div>
-                        </div>
-
-                        <DialogFooter>
-                            <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Cancel</Button>
-                            <Button onClick={handleSave} disabled={loading}>{editingItem ? 'Save Changes' : 'Add Item'}</Button>
-                        </DialogFooter>
-                    </DialogContent>
-                </Dialog>
+                            <DialogFooter>
+                                <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Cancel</Button>
+                                <Button onClick={handleSave} disabled={loading}>{editingItem ? 'Save Changes' : 'Add Item'}</Button>
+                            </DialogFooter>
+                        </DialogContent>
+                    </Dialog>
                 </div>
             </div>
 
@@ -494,7 +494,7 @@ export function MenuEditor({ placeId }: { placeId: string }) {
                             Based on preferences from {customerCount} regular customers
                         </DialogDescription>
                     </DialogHeader>
-                    
+
                     <div className="space-y-4 max-h-[60vh] overflow-y-auto">
                         {aiSuggestions.length === 0 && !aiLoading && (
                             <div className="text-center py-8 text-muted-foreground">
@@ -503,7 +503,7 @@ export function MenuEditor({ placeId }: { placeId: string }) {
                                 <p className="text-sm">AI recommendations will improve as you get more reservations.</p>
                             </div>
                         )}
-                        
+
                         {aiSuggestions.length > 0 && (
                             <>
                                 <div className="space-y-3">
@@ -518,7 +518,7 @@ export function MenuEditor({ placeId }: { placeId: string }) {
                                         </Card>
                                     ))}
                                 </div>
-                                
+
                                 {aiReasoning && (
                                     <div className="mt-4 p-4 bg-gray-50 rounded-lg border">
                                         <h4 className="font-semibold text-sm mb-2 flex items-center gap-2">
@@ -531,7 +531,7 @@ export function MenuEditor({ placeId }: { placeId: string }) {
                             </>
                         )}
                     </div>
-                    
+
                     <DialogFooter>
                         <Button onClick={() => setAiSuggestionsOpen(false)}>Close</Button>
                     </DialogFooter>
