@@ -1,3 +1,13 @@
+/**
+ * Smart Restaurant Cache with Geohash Queries
+ * 
+ * Features:
+ * - Cache-first light discovery with adaptive fetching
+ * - Geohash-based proximity queries (~1.2km precision)
+ * - Light→Rich data upgrade logic
+ * - 7-day TTL with automatic expiration
+ */
+
 import { getAdminDb } from "@/lib/firebase-admin";
 import type { Restaurant, RestaurantImage } from "@/types";
 import geohash from "ngeohash";
@@ -110,6 +120,7 @@ async function fetchFromGooglePlaces(placeId: string): Promise<any> {
         'userRatingCount',
         'priceLevel',
         'types',
+        'businessStatus',          // For pre-enrichment filtering
         'nationalPhoneNumber',
         'websiteUri',
         'regularOpeningHours',
@@ -177,6 +188,7 @@ export async function saveRestaurantToCache(
             rating: googleData.rating,
             priceLevel: googleData.priceLevel,
             types: googleData.types || [],
+            businessStatus: googleData.businessStatus,  // "OPERATIONAL" | "CLOSED_TEMPORARILY" | "CLOSED_PERMANENTLY"
             phoneNumber: googleData.nationalPhoneNumber,
             website: googleData.websiteUri,
             openingHours: googleData.regularOpeningHours, // RICH only
@@ -236,6 +248,51 @@ export async function saveRestaurantToCache(
     console.log(`[RestaurantCache] 💾 SAVED: ${placeId} [${restaurant.cacheMetadata.dataLevel}]`);
 
     return restaurant;
+}
+
+/**
+ * Query restaurants from cache by geographic proximity using geohash.
+ * Returns restaurants within ~1.2km of given coordinates.
+ * 
+ * @param lat - Latitude
+ * @param lng - Longitude
+ * @param maxResults - Maximum number of results to return (default: 20)
+ * @returns Array of cached restaurants sorted by freshness
+ */
+export async function getCachedRestaurantsByLocation(
+    lat: number,
+    lng: number,
+    maxResults: number = 20
+): Promise<Restaurant[]> {
+    const hash = geohash.encode(lat, lng, GEOHASH_PRECISION);
+
+    // Query by geohash prefix (all restaurants in same geohash cell)
+    const snapshot = await getAdminDb()
+        .collection('restaurants')
+        .where('geohash', '>=', hash)
+        .where('geohash', '<=', hash + '\uf8ff')
+        .limit(maxResults * 2) // Get extra to filter stale
+        .get();
+
+    const validRestaurants: Restaurant[] = [];
+
+    snapshot.forEach(doc => {
+        const data = doc.data() as Restaurant;
+
+        // Only include non-stale entries
+        if (!isCacheStale(data.cacheMetadata.expiresAt)) {
+            validRestaurants.push(data);
+        }
+    });
+
+    // Sort by cache freshness (newest first) and limit
+    return validRestaurants
+        .sort((a, b) => {
+            const timeA = new Date(a.updatedAt).getTime();
+            const timeB = new Date(b.updatedAt).getTime();
+            return timeB - timeA;
+        })
+        .slice(0, maxResults);
 }
 
 /**

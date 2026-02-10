@@ -186,6 +186,14 @@ export interface LightCandidate {
     userRatingCount?: number;
     location: { lat: number; lng: number };
     distance?: number;
+
+    // Pre-enrichment filtering support (from cache)
+    priceLevel?: number;           // 1-4 price range
+    businessStatus?: string;       // "OPERATIONAL" | "CLOSED_TEMPORARILY" | "CLOSED_PERMANENTLY"
+    currentOpeningHours?: {        // For smart time-based filtering
+        openNow?: boolean;
+        weekdayDescriptions?: string[];
+    };
 }
 
 interface UserDietaryProfile {

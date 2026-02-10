@@ -12,14 +12,18 @@ export async function getPlaceDetails(placeId: string): Promise<Place | null> {
     // We check Firestore first. If claimed, we serve that data and SKIP Google API.
     try {
         const { getAdminDb } = await import("@/lib/firebase-admin");
-        const doc = await getAdminDb().collection("restaurants").doc(placeId).get();
+        const db = getAdminDb();
+
+        // Parallelize Firestore reads
+        const [doc, menuSnap] = await Promise.all([
+            db.collection("restaurants").doc(placeId).get(),
+            db.collection("restaurants").doc(placeId).collection("menu").get()
+        ]);
 
         if (doc.exists) {
             const data = doc.data();
             // If claimed, capture the claim data
             if (data?.isClaimed) {
-                // Check for menu subcollection first
-                const menuSnap = await getAdminDb().collection("restaurants").doc(placeId).collection("menu").get();
                 let menuItems = data.menu?.items || [];
 
                 if (!menuSnap.empty) {
@@ -182,48 +186,53 @@ export async function getPlaceDetails(placeId: string): Promise<Place | null> {
         description: data.editorialSummary?.text
     };
 
-    // 3b. Self-healing / Backfilling details to Firestore if it was claimed but missing details
+    // 3b & 4. Parallel: Self-heal claimed places + Cache write
+    const ttl = claimData?.isClaimed ? 5 * 60 * 1000 : 24 * 60 * 60 * 1000;
+
+    const writeOperations = [
+        setCache("place_details_cache_v2", cacheKey, mappedResult, ttl)
+    ];
+
+    // Add self-heal operation if needed
     if (claimData) {
-        try {
-            // We have a claimed place with missing details. Let's fix that record.
-            const { getAdminDb } = await import("@/lib/firebase-admin");
+        const selfHealOperation = (async () => {
+            try {
+                const { getAdminDb } = await import("@/lib/firebase-admin");
+                const googlePhotos = photos.map((p: { height: number; width: number; name?: string; photo_reference?: string }) => ({
+                    height: p.height,
+                    width: p.width,
+                    photoReference: p.name || p.photo_reference,
+                }));
 
-            // Extract google photos for storage
-            const googlePhotos = photos.map((p: { height: number; width: number; name?: string; photo_reference?: string }) => ({
-                height: p.height,
-                width: p.width,
-                photoReference: p.name || p.photo_reference,
-            }));
+                await getAdminDb().collection("restaurants").doc(placeId).set({
+                    details: {
+                        name: mappedResult.name,
+                        address: mappedResult.formatted_address,
+                        phoneNumber: mappedResult.formatted_phone_number,
+                        website: mappedResult.website,
+                        rating: mappedResult.rating,
+                        userRatingCount: mappedResult.user_ratings_total,
+                        priceLevel: mappedResult.price_level,
+                        types: mappedResult.types,
+                        geometry: mappedResult.geometry,
+                    },
+                    images: {
+                        google: googlePhotos
+                    },
+                    updatedAt: new Date().toISOString(),
+                    openingHoursSpecification: mappedResult.openingHoursSpecification
+                }, { merge: true });
+                console.log(`[PlaceService] 🩹 Self-healed missing details/images for claimed place ${placeId}`);
+            } catch (healErr) {
+                console.error("[PlaceService] Failed to self-heal claimed place:", healErr);
+            }
+        })();
 
-            await getAdminDb().collection("restaurants").doc(placeId).set({
-                details: {
-                    name: mappedResult.name,
-                    address: mappedResult.formatted_address,
-                    phoneNumber: mappedResult.formatted_phone_number,
-                    website: mappedResult.website,
-                    rating: mappedResult.rating,
-                    userRatingCount: mappedResult.user_ratings_total,
-                    priceLevel: mappedResult.price_level,
-                    types: mappedResult.types,
-                    geometry: mappedResult.geometry,
-                    // We skip photos array for now to avoid complexity, or deep copy it
-                },
-                images: {
-                    google: googlePhotos
-                },
-                updatedAt: new Date().toISOString(),
-                openingHoursSpecification: mappedResult.openingHoursSpecification
-            }, { merge: true });
-            console.log(`[PlaceService] 🩹 Self-healed missing details/images for claimed place ${placeId}`);
-        } catch (healErr) {
-            console.error("[PlaceService] Failed to self-heal claimed place:", healErr);
-        }
+        writeOperations.push(selfHealOperation);
     }
 
-    // 4. Save to Cache
-    // TTL: 24h for normal places, 5m for claimed places to ensure owner changes are visible
-    const ttl = claimData?.isClaimed ? 5 * 60 * 1000 : 24 * 60 * 60 * 1000;
-    await setCache("place_details_cache_v2", cacheKey, mappedResult, ttl);
+    // Execute all writes in parallel
+    await Promise.all(writeOperations);
 
     // Merge claim data before returning
     if (claimData) {

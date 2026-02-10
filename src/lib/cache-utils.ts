@@ -6,6 +6,38 @@ interface CacheEntry<T = unknown> {
     ttl: number;
 }
 
+// In-memory cache usage tracking (reset on server restart)
+// Replaces Firestore writes on every cache read
+const cacheHitMetrics = new Map<string, { hits: number; lastAccessed: number }>();
+
+/**
+ * Records a cache hit in memory for analytics.
+ * Much cheaper than Firestore writes on every read.
+ */
+function trackCacheHit(collectionName: string, key: string) {
+    const metricKey = `${collectionName}:${key}`;
+    const existing = cacheHitMetrics.get(metricKey);
+
+    if (existing) {
+        existing.hits++;
+        existing.lastAccessed = Date.now();
+    } else {
+        cacheHitMetrics.set(metricKey, { hits: 1, lastAccessed: Date.now() });
+    }
+}
+
+/**
+ * Gets cache metrics for monitoring and debugging.
+ * Used by /api/debug/cache-stats endpoint.
+ */
+export function getCacheMetrics() {
+    const metrics: Record<string, { hits: number; lastAccessed: number }> = {};
+    cacheHitMetrics.forEach((value, key) => {
+        metrics[key] = value;
+    });
+    return metrics;
+}
+
 /**
  * Gets a cached value from Firestore if it exists and is not expired.
  */
@@ -39,36 +71,14 @@ export async function getCache<T = unknown>(collectionName: string, key: string)
             return null;
         }
 
-        // Async update usage stats (fire & forget)
-        updateCacheUsage(collectionName, key).catch(e => console.error("Cache usage update failed:", e));
+        // Track cache hit in memory (no Firestore write)
+        trackCacheHit(collectionName, key);
 
         return entry.data;
     } catch (error) {
         console.error("Cache get error (ignoring):", error);
         return null; // Fail safe
     }
-}
-
-/**
- * Updates the last_accessed timestamp and usage_count for a cache entry.
- * Uses atomic increments where possible.
- */
-async function updateCacheUsage(collectionName: string, key: string) {
-    // Only track usage for grid cache for now (optimization)
-    if (!collectionName.includes("grid")) return;
-
-    const ref = getCacheCollectionRef(collectionName).doc(key);
-
-    // Using FieldValue.increment requires importing firebase-admin/firestore
-    // Since we are using a custom wrapper, let's use a simple update for now
-    // or properly import FieldValue if available in getAdminDb context.
-    // For simplicity and speed: just set last_accessed. 
-    // Usage count is nice but last_accessed is critical for the "14 days" rule.
-
-    await ref.update({
-        "data.last_accessed": Date.now(),
-        // "data.usage_count": getAdminDb().FieldValue.increment(1) // pseudo-code, requires proper import
-    });
 }
 
 /**

@@ -13,7 +13,21 @@
             "**/node_modules/**"
         ],
         "frameworksBackend": {
-            "region": "europe-west1"
+            "region": "europe-west1",
+            "environmentVariables": {
+                "STRIPE_SECRET_KEY": "projects/nearspotty-13f22/secrets/STRIPE_SECRET_KEY/versions/latest",
+                "STRIPE_WEBHOOK_SECRET": "projects/nearspotty-13f22/secrets/STRIPE_WEBHOOK_SECRET/versions/latest",
+                "GEMINI_API_KEY": "projects/nearspotty-13f22/secrets/GEMINI_API_KEY/versions/latest",
+                "NEXT_PUBLIC_FIREBASE_API_KEY": "projects/nearspotty-13f22/secrets/NEXT_PUBLIC_FIREBASE_API_KEY/versions/latest",
+                "NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN": "projects/nearspotty-13f22/secrets/NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN/versions/latest",
+                "NEXT_PUBLIC_FIREBASE_PROJECT_ID": "projects/nearspotty-13f22/secrets/NEXT_PUBLIC_FIREBASE_PROJECT_ID/versions/latest",
+                "NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET": "projects/nearspotty-13f22/secrets/NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET/versions/latest",
+                "NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID": "projects/nearspotty-13f22/secrets/NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID/versions/latest",
+                "NEXT_PUBLIC_FIREBASE_APP_ID": "projects/nearspotty-13f22/secrets/NEXT_PUBLIC_FIREBASE_APP_ID/versions/latest",
+                "NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID": "projects/nearspotty-13f22/secrets/NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID/versions/latest",
+                "NEXT_PUBLIC_GOOGLE_MAPS_KEY": "projects/nearspotty-13f22/secrets/NEXT_PUBLIC_GOOGLE_MAPS_KEY/versions/latest",
+                "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY": "projects/nearspotty-13f22/secrets/NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY/versions/latest"
+            }
         },
         "headers": [
             {

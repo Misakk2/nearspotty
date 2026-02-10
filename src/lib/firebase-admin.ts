@@ -81,7 +81,7 @@ export function getAdminApp(): App {
             console.log(`[Firebase Admin] 🚀 Initializing in EMULATOR Mode for Project: ${finalProjectId}`);
             _adminApp = initializeApp({
                 projectId: finalProjectId,
-                storageBucket: storageBucket
+                storageBucket: storageBucket,
             });
             return _adminApp;
         }

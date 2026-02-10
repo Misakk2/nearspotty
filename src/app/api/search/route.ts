@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAdminAuth, getAdminDb } from "@/lib/firebase-admin";
 import { reserveUserCredit, refundUserCredit } from "@/lib/user-limits";
 import { scorePlacesWithDeepContext, scoutTopCandidates, PlaceWithContext, LightCandidate } from "@/lib/gemini";
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import { getOrFetchRestaurant, resolveRestaurantImage, saveRestaurantToCache, getEnrichedRestaurants } from "@/lib/restaurant-cache";
+import { getCachedRestaurantsByLocation, getEnrichedRestaurants, resolveRestaurantImage, saveRestaurantToCache } from "@/lib/restaurant-cache";
 import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit"; // ✅ Rate Limit Import
 import type { Restaurant, UserCredits } from "@/types";
 import { z } from "zod"; // ✅ NEW: Zod validation
@@ -170,6 +169,80 @@ import { getCache } from "@/lib/cache-utils";
 import { getNearbyGridKeys, PlacesCacheEntry } from "@/types/cached-places";
 
 /**
+ * Pre-enrichment filtering - removes unsuitable restaurants BEFORE expensive AI scoring
+ * 
+ * Filters:
+ * - Permanently/temporarily closed businesses
+ * - Price level outside user budget
+ * - Non-restaurant types (gas stations, lodging, etc.)
+ * 
+ * @param candidates - Raw light candidates from discovery
+ * @param userBudget - User budget preference ('low' | 'medium' | 'high' | 'any')
+ * @returns Filtered candidates suitable for enrichment
+ */
+function filterLightCandidates(
+    candidates: LightCandidate[],
+    userBudget: string
+): { filtered: LightCandidate[]; removed: number } {
+    const startCount = candidates.length;
+
+    // Budget -> Price Level mapping
+    const budgetRanges: Record<string, number[]> = {
+        'low': [1, 2],        // Inexpensive to Moderate
+        'medium': [2, 3],     // Moderate to Expensive
+        'high': [3, 4],       // Expensive to Very Expensive
+        'any': [1, 2, 3, 4]   // All ranges
+    };
+
+    const allowedPriceLevels = budgetRanges[userBudget] || budgetRanges['any'];
+
+    // Non-restaurant types to exclude
+    const excludedTypes = new Set([
+        'gas_station',
+        'lodging',
+        'car_rental',
+        'car_wash',
+        'parking',
+        'store',
+        'supermarket',
+        'convenience_store'
+    ]);
+
+    const filtered = candidates.filter(candidate => {
+        // Filter 1: Remove closed businesses
+        if (candidate.businessStatus === 'CLOSED_PERMANENTLY' ||
+            candidate.businessStatus === 'CLOSED_TEMPORARILY') {
+            console.log(`[PreFilter] ❌ Closed: ${candidate.name} (${candidate.businessStatus})`);
+            return false;
+        }
+
+        // Filter 2: Price level check (only if available from cache)
+        if (candidate.priceLevel !== undefined && userBudget !== 'any') {
+            if (!allowedPriceLevels.includes(candidate.priceLevel)) {
+                console.log(`[PreFilter] ❌ Price mismatch: ${candidate.name} (Level ${candidate.priceLevel}, Budget: ${userBudget})`);
+                return false;
+            }
+        }
+
+        // Filter 3: Exclude non-restaurant types
+        const hasExcludedType = candidate.types.some(type => excludedTypes.has(type));
+        if (hasExcludedType) {
+            console.log(`[PreFilter] ❌ Non-restaurant: ${candidate.name} (${candidate.types.join(', ')})`);
+            return false;
+        }
+
+        return true;
+    });
+
+    const removed = startCount - filtered.length;
+    if (removed > 0) {
+        console.log(`[PreFilter] Removed ${removed}/${startCount} unsuitable candidates`);
+    }
+
+    return { filtered, removed };
+}
+
+/**
  * Stage 1: Discover up to 20 candidates with LIGHT fields only.
  * STRICT RADIUS: Uses locationRestriction (not locationBias) + Haversine post-filter.
  * NO AUTO-EXPANSION: If only 1 result in 200m, return 1 result.
@@ -190,11 +263,58 @@ async function findLightCandidates(
 
     const candidates: LightCandidate[] = [];
     const isPioneer = false;
-    const source: "firestore" | "google" | "hybrid" = "google";
+    let source: "firestore" | "google" | "hybrid" = "firestore";
     const existingIds = new Set<string>();
 
-    // --- Step 1A: Check Unified Grid Cache (v2) ---
-    // This allows consistency between "Discover" mode and "Search"
+    // =========================================================================
+    // STEP 1: Check restaurants/ cache via geohash (Cache-first!)
+    // =========================================================================
+    console.log(`[Stage1] Light discovery for: "${keyword}" at (${lat}, ${lng}) radius ${radius}m`);
+
+    const cachedRestaurants = await getCachedRestaurantsByLocation(lat, lng, 20);
+    let geohashHits = 0;
+
+    for (const restaurant of cachedRestaurants) {
+        const distance = haversineDistance(
+            lat, lng,
+            restaurant.details.geometry.location.lat,
+            restaurant.details.geometry.location.lng
+        );
+
+        if (distance <= radius) {
+            // Keyword filter
+            if (keyword) {
+                const name = restaurant.details.name.toLowerCase();
+                const types = restaurant.details.types.join(" ").toLowerCase();
+                const k = keyword.toLowerCase();
+                if (!name.includes(k) && !types.includes(k)) continue;
+            }
+
+            candidates.push({
+                place_id: restaurant.placeId,
+                name: restaurant.details.name,
+                types: restaurant.details.types,
+                rating: restaurant.details.rating,
+                userRatingCount: restaurant.details.userRatingCount,
+                location: restaurant.details.geometry.location,
+                distance,
+                priceLevel: mapPriceLevelToNumber(restaurant.details.priceLevel),
+                businessStatus: restaurant.details.businessStatus,
+                currentOpeningHours: restaurant.details.openingHours ? {
+                    openNow: restaurant.details.openingHours.openNow,
+                    weekdayDescriptions: restaurant.details.openingHours.weekdayDescriptions
+                } : undefined
+            });
+            existingIds.add(restaurant.placeId);
+            geohashHits++;
+        }
+    }
+
+    console.log(`[Light] Geohash cache: ${geohashHits} hits`);
+
+    // =========================================================================
+    // STEP 2: Check Unified Grid Cache (v2) for additional coverage
+    // =========================================================================
     try {
         const gridKeys = getNearbyGridKeys(lat, lng, radius);
         console.log(`[Light] Checking ${gridKeys.length} grid keys for cache hit...`);
@@ -250,43 +370,45 @@ async function findLightCandidates(
             }
         }
 
-        const allKeysCovered = coveredKeys.size === gridKeys.length;
+        const totalCacheHits = geohashHits + gridHitCount;
 
-        if (gridHitCount > 0 || allKeysCovered) {
-            console.log(`[Light] Cache Status: ${gridHitCount} places found. Coverage: ${coveredKeys.size}/${gridKeys.length} grids.`);
+        if (totalCacheHits > 0) {
+            console.log(`[Light] Total cache hits: ${totalCacheHits} (${geohashHits} geohash + ${gridHitCount} grid)`);
+            source = "firestore";
 
             // Sort by distance
             candidates.sort((a, b) => (a.distance || 0) - (b.distance || 0));
 
-            // NEW: ELITE CACHE LOGIC
-            // If all grid keys are covered, we have already fully searched this area.
-            // Even if we have 0 candidates, don't call Google again.
-            if (allKeysCovered || candidates.length >= BATCH_SIZE) {
-                console.log(`[Light] ${allKeysCovered ? 'Full area coverage' : 'Sufficient results'} in cache. Returning ${candidates.length} candidates.`);
-                return { candidates: candidates.slice(0, BATCH_SIZE), isPioneer: false, source: "firestore" };
+            // If we have enough candidates, return early
+            if (candidates.length >= BATCH_SIZE) {
+                console.log(`[Light] Sufficient cache hits (${candidates.length}). No Google API needed!`);
+                return {
+                    candidates: candidates.slice(0, BATCH_SIZE),
+                    isPioneer: false,
+                    source: "firestore",
+                    discardedCandidates: []
+                };
             }
         }
 
     } catch (err) {
-        console.warn("[Light] Grid cache check failed (non-fatal):", err);
+        console.warn("[Light] Cache check failed (non-fatal):", err);
     }
 
-    // --- Step 1B: REMOVED (Redundant Geohash Query) ---
-    // Grid Cache (Step 1A) already acts as the primary cache layer.
-    // If Grid Cache misses, we fall back directly to Google API (Step 1C).
-    // This saves 1 Firestore read per search (~50-100ms latency savings).
-
-    // Fallthrough to Google API if no candidates found in Grid Cache
-
-
-    // --- Step 1B: Fill remainder from Google Places API ---
+    // =========================================================================
+    // STEP 3: Adaptive Google API Fetch (only remaining count needed)
+    // =========================================================================
     const remaining = BATCH_SIZE - candidates.length;
+
     if (remaining > 0) {
-        console.log(`[Light] Fetching ${remaining} more from Google Places API (STRICT radius ${radius}m)...`);
+        console.log(`[Light] Need ${remaining} more. Fetching from Google Places API (STRICT radius ${radius}m)...`);
+        source = candidates.length > 0 ? "hybrid" : "google";
 
         let endpoint = "https://places.googleapis.com/v1/places:searchNearby";
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const requestBody: any = { maxResultCount: BATCH_SIZE };
+        const requestBody: any = {
+            maxResultCount: Math.min(remaining, 20) // Adaptive fetch - only what we need!
+        };
 
         // CRITICAL FIX: searchText uses locationBias (supports circle)
         // searchNearby uses locationRestriction (also supports circle)
@@ -346,7 +468,7 @@ async function findLightCandidates(
 
         console.log(`[Light] Received ${googlePlaces.length} places from Google, caching ALL...`);
 
-        // 1. CACHE ALL - Even if outside user's radius, save for future searches
+        // Cache ALL Google results to restaurants/ for future searches
         const cachePromises = googlePlaces.map(async (place) => {
             try {
                 await saveRestaurantToCache(place.id, place, undefined);
@@ -355,12 +477,12 @@ async function findLightCandidates(
             }
         });
 
-        // Fire and forget caching - don't block the response
+        // Fire and forget caching - don't block response
         Promise.all(cachePromises).then(() => {
             console.log(`[Light] Cached ${googlePlaces.length} places for future searches`);
-        }).catch(() => { });
+        }).catch(err => console.error("[Light] Cache promise error:", err));
 
-        // 2. NOW FILTER by user's strict radius
+        // Now filter by user's strict radius
         const existingIds = new Set(candidates.map(c => c.place_id));
         let addedCount = 0;
 
@@ -476,8 +598,7 @@ async function findSurvivalCandidate(lat: number, lng: number): Promise<LightCan
             const dist = haversineDistance(lat, lng, p.location.latitude, p.location.longitude);
             console.log(`[Survival] Found: ${p.displayName?.text} at ${Math.round(dist)}m`);
 
-            // Cache it!
-            saveRestaurantToCache(p.id, p, undefined).catch(() => { });
+            // Note: Place will be cached when getPlaceDetails is called during enrichment
 
             return {
                 place_id: p.id,
@@ -500,19 +621,22 @@ async function findSurvivalCandidate(lat: number, lng: number): Promise<LightCan
 // STEP 2: DATA ENRICHMENT
 // =============================================================================
 
-// Note: getEnrichedRestaurants is now imported from @/lib/restaurant-cache
-// It handles the "Light -> Rich" upgrade logic internally.
-// However, we need to map the `Restaurant[]` result to `EnrichedPlace[]` for the transaction.
+// Smart cache-first enrichment with light→rich upgrade logic
+// Uses getCachedRestaurantsByLocation() for proximity queries
 
 interface EnrichedPlace extends PlaceWithContext {
     imageSrc: string | null;
-    formatted_address: string;
+    formatted_address?: string;
     geometry: { location: { lat: number; lng: number } };
     user_ratings_total?: number;
+    editorialSummary?: string;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    reviews?: any[];
+    websiteUri?: string;
 }
 
 /**
- * Helper to map Cache Restaurant -> EnrichedPlace for Gemini
+ * Helper to map Restaurant -> EnrichedPlace for Gemini
  */
 function mapToEnrichedPlaces(restaurants: Restaurant[]): EnrichedPlace[] {
     return restaurants.map(r => ({
@@ -1012,13 +1136,36 @@ export async function GET(request: NextRequest) {
         // =========================================================================
         console.log(`[PremiumBranch] Proceeding with AI pipeline...`);
 
+        // --- PRE-ENRICHMENT FILTER: Remove unsuitable restaurants BEFORE AI ---
+        // Filters closed, price mismatches, non-restaurants to reduce Gemini costs
+        const filterResult = filterLightCandidates(lightCandidates, userPreferences.budget);
+        const filteredCandidates = filterResult.filtered;
+
+        if (filteredCandidates.length === 0) {
+            console.warn(`[PreFilter] All ${lightCandidates.length} candidates filtered out!`);
+            return NextResponse.json({
+                status: 'ZERO_RESULTS',
+                results: [],
+                credits: {
+                    remaining: creditCheck.remaining,
+                    limit: creditCheck.limit,
+                    used: creditCheck.used,
+                    tier: creditCheck.tier
+                },
+                source,
+                message: "No suitable restaurants found matching your preferences."
+            });
+        }
+
+        console.log(`[PreFilter] Using ${filteredCandidates.length} filtered candidates for AI pipeline`);
+
         // --- STAGE 2: AI Scout (Select top 6 with dietary awareness) ---
         const scoutProfile = {
             ...userPreferences,
             hasSuperlative: searchIntent.hasSuperlative
         };
 
-        const scoutResult = await scoutTopCandidates(lightCandidates, keyword, scoutProfile);
+        const scoutResult = await scoutTopCandidates(filteredCandidates, keyword, scoutProfile);
         console.log(`[Stage2] Scout: ${scoutResult.perfectMatches.length} perfect, survival=${scoutResult.isSurvivalMode}`);
 
         // Configurable Peek Ahead distance (default +2km)
@@ -1031,7 +1178,7 @@ export async function GET(request: NextRequest) {
             console.log(`[DecisionMode] No perfect matches. Returning decision point with survival: ${scoutResult.survivalOption.id}`);
 
             // Find the light candidate data for the survival option (NO enrichment!)
-            const survivalLight = lightCandidates.find(c => c.place_id === scoutResult.survivalOption!.id);
+            const survivalLight = filteredCandidates.find(c => c.place_id === scoutResult.survivalOption!.id);
 
             // Fetch user credits without deducting (just for display)
             let userCredits = { remaining: 0, limit: 0, used: 0, tier: "guest" };
@@ -1083,13 +1230,13 @@ export async function GET(request: NextRequest) {
         let winnerIds = scoutResult.perfectMatches;
 
         if (winnerIds.length === 0) {
-            // Fallback: use all light candidates if scout returns nothing
-            console.warn("[Stage2] Scout returned empty, using all light candidates");
-            winnerIds = lightCandidates.map(c => c.place_id).slice(0, SCOUT_TOP_N);
+            // Fallback: use filtered candidates if scout returns nothing
+            console.warn("[Stage2] Scout returned empty, using all filtered candidates");
+            winnerIds = filteredCandidates.map(c => c.place_id).slice(0, SCOUT_TOP_N);
         }
 
         // --- 5. Enrich Winners (Stage 3) ---
-        // This stage now handles the "Partial Cache" upgrade logic internally via getEnrichedRestaurants
+        // Smart cache-first enrichment with light→rich upgrade logic
         const enrichedRestaurants = await getEnrichedRestaurants(winnerIds);
 
         // Map to EnrichedPlace for transaction handler

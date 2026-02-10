@@ -8,11 +8,11 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { getAdminDb } from "@/lib/firebase-admin";
 import { createGridKey, placeToCache, cacheToPlace, CachedPlace, PlacesCacheEntry } from "@/types/cached-places";
 import { Place } from "@/types/place";
 import { getCache, setCache } from "@/lib/cache-utils";
 import { CACHE_DURATIONS } from "@/lib/cache-config";
+import { mergeClaimedRestaurantData } from "@/lib/cache-helpers";
 
 export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
@@ -53,44 +53,8 @@ export async function GET(request: NextRequest) {
                 )
                 : places;
 
-            // --------------------------------------------------------------------------
-            // OVERRIDE LOGIC: Fetch claimed restaurant data and merge
-            // --------------------------------------------------------------------------
-            const finalResults = [...filteredPlaces];
-
-            if (finalResults.length > 0) {
-                try {
-                    const placeIds = finalResults.map(p => p.place_id);
-                    const db = getAdminDb();
-
-                    const claimedDocs = await Promise.all(
-                        placeIds.map(id => db.collection("restaurants").doc(id).get())
-                    );
-
-                    claimedDocs.forEach(doc => {
-                        if (doc.exists) {
-                            const data = doc.data();
-                            if (data?.isClaimed) {
-                                const index = finalResults.findIndex(p => p.place_id === doc.id);
-                                if (index !== -1) {
-                                    // Merge logic
-                                    const place = finalResults[index];
-                                    finalResults[index] = {
-                                        ...place,
-                                        name: data.name || place.name,
-                                        formatted_address: data.address || place.formatted_address,
-                                        price_level: data.avgCheck ? (data.avgCheck > 50 ? 4 : data.avgCheck > 30 ? 3 : data.avgCheck > 15 ? 2 : 1) : place.price_level,
-                                        types: data.cuisineTypes && data.cuisineTypes.length > 0 ? [...data.cuisineTypes, ...place.types] : place.types
-                                    };
-                                }
-                            }
-                        }
-                    });
-
-                } catch (err) {
-                    console.error("[Discover] Failed to fetch claim overrides (Cache Hit):", err);
-                }
-            }
+            // Merge claimed restaurant data from Firestore
+            const finalResults = await mergeClaimedRestaurantData(filteredPlaces);
 
             return NextResponse.json({
                 results: finalResults,
@@ -214,55 +178,8 @@ export async function GET(request: NextRequest) {
             setCache("places_grid_cache", gridKey, cacheEntry, CACHE_DURATIONS.PLACES_GRID, "system-discover");
         }
 
-        // --------------------------------------------------------------------------
-        // OVERRIDE LOGIC: Fetch claimed restaurant data and merge
-        // --------------------------------------------------------------------------
-        const finalResults = [...places];
-
-        if (finalResults.length > 0) {
-            try {
-                const placeIds = finalResults.map(p => p.place_id);
-                // Firestore 'in' query limit is 10 usually? Actually 30.
-                // Our maxResultCount is 20. So it is safe.
-                const db = getAdminDb();
-
-
-                // Wait, 'in' query on documentId is tricky without the FieldPath object.
-                // Simpler approach compatible with our limited imports:
-                // Just use getAll if possible, or multiple reads (parallel).
-                // Since max 20, parallel reads are fast enough.
-
-                const claimedDocs = await Promise.all(
-                    placeIds.map(id => db.collection("restaurants").doc(id).get())
-                );
-
-                claimedDocs.forEach(doc => {
-                    if (doc.exists) {
-                        const data = doc.data();
-                        if (data?.isClaimed) {
-                            const index = finalResults.findIndex(p => p.place_id === doc.id);
-                            if (index !== -1) {
-                                // Merge logic
-                                const place = finalResults[index];
-                                finalResults[index] = {
-                                    ...place,
-                                    name: data.name || place.name,
-                                    formatted_address: data.address || place.formatted_address,
-                                    // Map average check to price level (approximate)
-                                    price_level: data.avgCheck ? (data.avgCheck > 50 ? 4 : data.avgCheck > 30 ? 3 : data.avgCheck > 15 ? 2 : 1) : place.price_level,
-                                    // We could append custom cuisine types to 'types' or strictly use them
-                                    types: data.cuisineTypes && data.cuisineTypes.length > 0 ? [...data.cuisineTypes, ...place.types] : place.types
-                                };
-                            }
-                        }
-                    }
-                });
-
-            } catch (err) {
-                console.error("[Discover] Failed to fetch claim overrides:", err);
-                // Continue with Google results on error
-            }
-        }
+        // Merge claimed restaurant data from Firestore
+        const finalResults = await mergeClaimedRestaurantData(places);
 
         return NextResponse.json({
             results: finalResults,

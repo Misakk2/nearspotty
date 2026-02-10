@@ -125,6 +125,7 @@ export interface Restaurant {
         rating?: number;
         priceLevel?: number;
         types: string[];
+        businessStatus?: string;  // "OPERATIONAL" | "CLOSED_TEMPORARILY" | "CLOSED_PERMANENTLY"
         phoneNumber?: string;
         website?: string;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
