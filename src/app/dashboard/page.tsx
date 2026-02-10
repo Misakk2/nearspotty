@@ -61,7 +61,9 @@ export default function BusinessDashboard() {
         address: "",
         avgCheck: 45,
         cuisine: "International",
-        location: "Prague, CZ"
+        location: "Prague, CZ",
+        seats: 50,
+        priceLevel: 2
     });
 
     const handlePlanUpgrade = async (plan: string) => {
@@ -94,6 +96,62 @@ export default function BusinessDashboard() {
             console.error("Upgrade error:", error);
             toast.dismiss();
             toast.error("Connection error. Please try again.");
+        }
+    };
+
+    const handlePlanChange = async (newPlan: string) => {
+        if (!user) return;
+        
+        const priceId = PLAN_TO_PRICE[newPlan];
+        if (!priceId) {
+            toast.error("Invalid plan selected");
+            return;
+        }
+
+        // Confirm with user
+        const isDowngrade = 
+            (userPlan === "pro" && (newPlan === "basic" || newPlan === "free")) ||
+            (userPlan === "basic" && newPlan === "free");
+
+        if (isDowngrade) {
+            const confirmed = confirm(
+                `Are you sure you want to downgrade to ${newPlan}? Some features will be immediately disabled. You'll receive a prorated credit.`
+            );
+            if (!confirmed) return;
+        }
+
+        const loadingToast = toast.loading(`Changing to ${newPlan} plan...`);
+        
+        try {
+            const token = await user.getIdToken();
+            const res = await fetch("/api/subscription/change-plan", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                    userId: user.uid,
+                    newPriceId: priceId
+                })
+            });
+
+            const data = await res.json();
+            
+            if (!res.ok) {
+                throw new Error(data.error || "Failed to change plan");
+            }
+
+            toast.dismiss(loadingToast);
+            toast.success(data.message || `Successfully changed to ${newPlan} plan!`);
+            
+            // Refresh page to reflect changes
+            setTimeout(() => window.location.reload(), 1500);
+            
+        } catch (error) {
+            console.error("Plan change error:", error);
+            toast.dismiss(loadingToast);
+            toast.error(error instanceof Error ? error.message : "Failed to change plan");
         }
     };
     const [userPlan, setUserPlan] = useState<BusinessPlan>("free");
@@ -140,7 +198,9 @@ export default function BusinessDashboard() {
                         address: b.address || prev.address,
                         avgCheck: b.avgCheck || prev.avgCheck,
                         cuisine: b.cuisineTypes?.join(", ") || b.cuisine || prev.cuisine,
-                        location: b.location || prev.location
+                        location: b.location || prev.location,
+                        seats: b.tableConfig?.totalSeats || b.seats || prev.seats,
+                        priceLevel: b.price_level || prev.priceLevel
                     }));
                 }
             }
@@ -266,7 +326,7 @@ export default function BusinessDashboard() {
                         </div>
 
                         {/* Navigation Tabs */}
-                        <div className="flex gap-2 p-1 bg-gray-100 rounded-2xl w-fit overflow-x-auto">
+                        <div className="flex gap-2 p-1 bg-gray-100 rounded-2xl w-fit overflow-x-auto scrollbar-hide touch-pan-x max-w-full">
                             {[
                                 { id: 'overview', label: 'Overview', icon: Users },
                                 { id: 'menu', label: 'Menu', icon: Sparkles },
@@ -322,9 +382,12 @@ export default function BusinessDashboard() {
                         {activeTab === 'pricing' && (
                             <motion.section initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
                                 <PricingSettings
+                                    placeId={restaurantData.placeId}
                                     location={restaurantData.location}
                                     cuisine={restaurantData.cuisine}
                                     avgCheck={restaurantData.avgCheck}
+                                    seats={restaurantData.seats}
+                                    priceLevel={restaurantData.priceLevel}
                                 />
                             </motion.section>
                         )}
@@ -429,72 +492,86 @@ export default function BusinessDashboard() {
                                         </CardFooter>
                                     </Card>
 
-                                    {/* Quick Upgrade Card */}
-                                    {userPlan !== "enterprise" && (
-                                        <Card className="border-2 border-primary/20 shadow-sm bg-gradient-to-br from-primary/5 to-orange-500/5">
-                                            <CardHeader>
-                                                <CardTitle className="flex items-center gap-2">
-                                                    <Sparkles className="h-5 w-5 text-primary" />
-                                                    Upgrade Your Plan
-                                                </CardTitle>
-                                                <CardDescription>Select a plan to unlock more features</CardDescription>
-                                            </CardHeader>
-                                            <CardContent>
-                                                <div className="space-y-4">
-                                                    {userPlan === "free" && (
-                                                        <button
-                                                            onClick={() => handlePlanUpgrade('basic')}
-                                                            className="w-full p-4 bg-white rounded-xl border text-left hover:border-primary transition-all group"
-                                                        >
-                                                            <div className="flex justify-between items-center">
-                                                                <div>
-                                                                    <p className="font-bold">Basic Plan - €29/mo</p>
-                                                                    <p className="text-sm text-gray-500">50 reservations, restaurant profile</p>
-                                                                </div>
-                                                                <ArrowRight className="h-4 w-4 text-gray-300 group-hover:text-primary transition-colors" />
-                                                            </div>
-                                                        </button>
-                                                    )}
-                                                    {(userPlan === "free" || userPlan === "basic") && (
-                                                        <button
-                                                            onClick={() => handlePlanUpgrade('pro')}
-                                                            className="w-full p-4 bg-white rounded-xl border border-primary/30 text-left hover:border-primary transition-all group relative overflow-hidden"
-                                                        >
-                                                            <div className="absolute top-0 right-0 bg-primary text-white text-[10px] px-2 py-0.5 font-bold rounded-bl-lg">
-                                                                POPULAR
-                                                            </div>
-                                                            <div className="flex justify-between items-center">
-                                                                <div>
-                                                                    <p className="font-bold">Pro Plan - €79/mo</p>
-                                                                    <p className="text-sm text-gray-500">Unlimited reservations, AI insights</p>
-                                                                </div>
-                                                                <ArrowRight className="h-4 w-4 text-gray-300 group-hover:text-primary transition-colors" />
-                                                            </div>
-                                                        </button>
-                                                    )}
+                                    {/* Plan Change Card */}
+                                    <Card className="border-2 border-primary/20 shadow-sm bg-gradient-to-br from-primary/5 to-orange-500/5">
+                                        <CardHeader>
+                                            <CardTitle className="flex items-center gap-2">
+                                                <Sparkles className="h-5 w-5 text-primary" />
+                                                {userPlan === "free" ? "Upgrade Your Plan" : "Change Your Plan"}
+                                            </CardTitle>
+                                            <CardDescription>
+                                                {userPlan === "free" 
+                                                    ? "Select a plan to unlock more features"
+                                                    : "Upgrade or downgrade your subscription"}
+                                            </CardDescription>
+                                        </CardHeader>
+                                        <CardContent>
+                                            <div className="space-y-4">
+                                                {/* Show Free option only if on paid plan */}
+                                                {userPlan !== "free" && stripeCustomerId && (
                                                     <button
-                                                        onClick={() => handlePlanUpgrade('enterprise')}
+                                                        onClick={() => {
+                                                            const confirmed = confirm("Are you sure you want to cancel your subscription? You'll be downgraded to the free plan at the end of your billing period.");
+                                                            if (confirmed) {
+                                                                window.open(`/api/create-portal-session`, "_blank");
+                                                            }
+                                                        }}
+                                                        className="w-full p-4 bg-white rounded-xl border text-left hover:border-gray-400 transition-all group"
+                                                    >
+                                                        <div className="flex justify-between items-center">
+                                                            <div>
+                                                                <p className="font-bold text-gray-700">Free Plan</p>
+                                                                <p className="text-sm text-gray-500">10 reservations/mo - Basic features</p>
+                                                            </div>
+                                                            <ArrowRight className="h-4 w-4 text-gray-300 group-hover:text-gray-600 transition-colors" />
+                                                        </div>
+                                                    </button>
+                                                )}
+
+                                                {/* Basic Plan */}
+                                                {userPlan !== "basic" && (
+                                                    <button
+                                                        onClick={() => userPlan === "free" ? handlePlanUpgrade('basic') : handlePlanChange('basic')}
                                                         className="w-full p-4 bg-white rounded-xl border text-left hover:border-primary transition-all group"
                                                     >
                                                         <div className="flex justify-between items-center">
                                                             <div>
-                                                                <p className="font-bold">Enterprise Plan - €199/mo</p>
-                                                                <p className="text-sm text-gray-500">Multi-location & dedicated support</p>
+                                                                <p className="font-bold">Basic Plan - €29/mo</p>
+                                                                <p className="text-sm text-gray-500">50 reservations/mo, restaurant profile</p>
                                                             </div>
                                                             <ArrowRight className="h-4 w-4 text-gray-300 group-hover:text-primary transition-colors" />
                                                         </div>
                                                     </button>
-                                                </div>
-                                            </CardContent>
-                                            <CardFooter>
-                                                <Link href="/for-restaurants#pricing" className="w-full">
-                                                    <Button variant="ghost" className="w-full">
-                                                        Compare All Features
-                                                    </Button>
-                                                </Link>
-                                            </CardFooter>
-                                        </Card>
-                                    )}
+                                                )}
+
+                                                {/* Pro Plan */}
+                                                {userPlan !== "pro" && (
+                                                    <button
+                                                        onClick={() => userPlan === "free" ? handlePlanUpgrade('pro') : handlePlanChange('pro')}
+                                                        className="w-full p-4 bg-white rounded-xl border border-primary/30 text-left hover:border-primary transition-all group relative overflow-hidden"
+                                                    >
+                                                        <div className="absolute top-0 right-0 bg-primary text-white text-[10px] px-2 py-0.5 font-bold rounded-bl-lg">
+                                                            POPULAR
+                                                        </div>
+                                                        <div className="flex justify-between items-center">
+                                                            <div>
+                                                                <p className="font-bold">Pro Plan - €79/mo</p>
+                                                                <p className="text-sm text-gray-500">Unlimited reservations, AI insights, SMS</p>
+                                                            </div>
+                                                            <ArrowRight className="h-4 w-4 text-gray-300 group-hover:text-primary transition-colors" />
+                                                        </div>
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </CardContent>
+                                        <CardFooter>
+                                            <Link href="/for-restaurants#pricing" className="w-full">
+                                                <Button variant="ghost" className="w-full">
+                                                    Compare All Features
+                                                </Button>
+                                            </Link>
+                                        </CardFooter>
+                                    </Card>
                                 </div>
                             </motion.section>
                         )}
@@ -563,71 +640,134 @@ export default function BusinessDashboard() {
                                                     <p>No reservations found yet.</p>
                                                 </div>
                                             ) : (
-                                                <div className="overflow-x-auto">
-                                                    <table className="w-full text-sm text-left">
-                                                        <thead className="text-xs text-gray-700 uppercase bg-gray-50 border-b">
-                                                            <tr>
-                                                                <th className="px-6 py-3 font-semibold">Customer</th>
-                                                                <th className="px-6 py-3 font-semibold">Date & Time</th>
-                                                                <th className="px-6 py-3 font-semibold text-center">Party</th>
-                                                                <th className="px-6 py-3 font-semibold">Contact</th>
-                                                                <th className="px-6 py-3 font-semibold">Status</th>
-                                                                <th className="px-6 py-3 font-semibold text-right">Actions</th>
-                                                            </tr>
-                                                        </thead>
-                                                        <tbody className="divide-y">
-                                                            {reservations.map((res) => (
-                                                                <tr key={res.id} className="hover:bg-gray-50/80 transition-colors">
-                                                                    <td className="px-6 py-4 font-medium">{res.customerName}</td>
-                                                                    <td className="px-6 py-4 whitespace-nowrap">
-                                                                        <div className="flex flex-col">
-                                                                            <span className="font-medium">{res.date.toDate().toLocaleDateString()}</span>
-                                                                            <span className="text-gray-500 text-xs">{res.time}</span>
+                                                <>
+                                                    {/* Mobile Card View */}
+                                                    <div className="md:hidden space-y-4">
+                                                        {reservations.map((res) => (
+                                                            <Card key={res.id} className="p-4 shadow-sm">
+                                                                <div className="space-y-3">
+                                                                    <div className="flex items-start justify-between">
+                                                                        <div>
+                                                                            <h3 className="font-semibold text-base">{res.customerName}</h3>
+                                                                            <p className="text-sm text-gray-600">{res.customerEmail}</p>
+                                                                            <p className="text-sm text-gray-600">{res.customerPhone}</p>
                                                                         </div>
-                                                                    </td>
-                                                                    <td className="px-6 py-4 text-center">
-                                                                        <Badge variant="secondary" className="font-bold">{res.guests} pers.</Badge>
-                                                                    </td>
-                                                                    <td className="px-6 py-4 text-xs text-gray-500">
-                                                                        <div>{res.customerEmail}</div>
-                                                                        <div>{res.customerPhone}</div>
-                                                                    </td>
-                                                                    <td className="px-6 py-4">
                                                                         <Badge className={
-                                                                            res.status === 'confirmed' ? 'bg-green-100 text-green-700 hover:bg-green-200 border-none' :
-                                                                                res.status === 'pending' ? 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 border-none' :
+                                                                            res.status === 'confirmed' ? 'bg-green-100 text-green-700 border-none' :
+                                                                                res.status === 'pending' ? 'bg-yellow-100 text-yellow-700 border-none' :
                                                                                     'bg-red-100 text-red-700 border-none'
                                                                         }>
                                                                             {res.status}
                                                                         </Badge>
-                                                                    </td>
-                                                                    <td className="px-6 py-4 text-right">
-                                                                        {res.status === 'pending' && (
-                                                                            <div className="flex justify-end gap-2">
-                                                                                <Button
-                                                                                    size="sm"
-                                                                                    variant="outline"
-                                                                                    className="h-8 w-8 p-0 text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
-                                                                                    onClick={() => handleStatusUpdate(res.id, 'rejected')}
-                                                                                >
-                                                                                    <X className="h-4 w-4" />
-                                                                                </Button>
-                                                                                <Button
-                                                                                    size="sm"
-                                                                                    variant="outline"
-                                                                                    className="h-8 w-8 p-0 text-green-600 hover:text-green-700 hover:bg-green-50 border-green-200"
-                                                                                    onClick={() => handleStatusUpdate(res.id, 'confirmed')}
-                                                                                >
-                                                                                    <Check className="h-4 w-4" />
-                                                                                </Button>
-                                                                            </div>
-                                                                        )}
-                                                                    </td>
+                                                                    </div>
+                                                                    <div className="flex items-center gap-4 text-sm text-gray-600">
+                                                                        <div className="flex items-center gap-1">
+                                                                            <Calendar className="h-4 w-4" />
+                                                                            <span>{res.date.toDate().toLocaleDateString()}</span>
+                                                                        </div>
+                                                                        <div className="flex items-center gap-1">
+                                                                            <Clock className="h-4 w-4" />
+                                                                            <span>{res.time}</span>
+                                                                        </div>
+                                                                        <div className="flex items-center gap-1">
+                                                                            <Users className="h-4 w-4" />
+                                                                            <span>{res.guests}</span>
+                                                                        </div>
+                                                                    </div>
+                                                                    {res.status === 'pending' && (
+                                                                        <div className="flex gap-2 pt-2">
+                                                                            <Button
+                                                                                size="sm"
+                                                                                variant="outline"
+                                                                                className="flex-1 text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
+                                                                                onClick={() => handleStatusUpdate(res.id, 'rejected')}
+                                                                            >
+                                                                                <X className="h-4 w-4 mr-1" />
+                                                                                Reject
+                                                                            </Button>
+                                                                            <Button
+                                                                                size="sm"
+                                                                                variant="outline"
+                                                                                className="flex-1 text-green-600 hover:text-green-700 hover:bg-green-50 border-green-200"
+                                                                                onClick={() => handleStatusUpdate(res.id, 'confirmed')}
+                                                                            >
+                                                                                <Check className="h-4 w-4 mr-1" />
+                                                                                Confirm
+                                                                            </Button>
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            </Card>
+                                                        ))}
+                                                    </div>
+
+                                                    {/* Desktop Table View */}
+                                                    <div className="hidden md:block overflow-x-auto">
+                                                        <table className="w-full text-sm text-left">
+                                                            <thead className="text-xs text-gray-700 uppercase bg-gray-50 border-b">
+                                                                <tr>
+                                                                    <th className="px-6 py-3 font-semibold">Customer</th>
+                                                                    <th className="px-6 py-3 font-semibold">Date & Time</th>
+                                                                    <th className="px-6 py-3 font-semibold text-center">Party</th>
+                                                                    <th className="px-6 py-3 font-semibold">Contact</th>
+                                                                    <th className="px-6 py-3 font-semibold">Status</th>
+                                                                    <th className="px-6 py-3 font-semibold text-right">Actions</th>
                                                                 </tr>
-                                                            ))}
-                                                        </tbody>
-                                                    </table>
-                                                </div>
+                                                            </thead>
+                                                            <tbody className="divide-y">
+                                                                {reservations.map((res) => (
+                                                                    <tr key={res.id} className="hover:bg-gray-50/80 transition-colors">
+                                                                        <td className="px-6 py-4 font-medium">{res.customerName}</td>
+                                                                        <td className="px-6 py-4 whitespace-nowrap">
+                                                                            <div className="flex flex-col">
+                                                                                <span className="font-medium">{res.date.toDate().toLocaleDateString()}</span>
+                                                                                <span className="text-gray-500 text-xs">{res.time}</span>
+                                                                            </div>
+                                                                        </td>
+                                                                        <td className="px-6 py-4 text-center">
+                                                                            <Badge variant="secondary" className="font-bold">{res.guests} pers.</Badge>
+                                                                        </td>
+                                                                        <td className="px-6 py-4 text-xs text-gray-500">
+                                                                            <div>{res.customerEmail}</div>
+                                                                            <div>{res.customerPhone}</div>
+                                                                        </td>
+                                                                        <td className="px-6 py-4">
+                                                                            <Badge className={
+                                                                                res.status === 'confirmed' ? 'bg-green-100 text-green-700 hover:bg-green-200 border-none' :
+                                                                                    res.status === 'pending' ? 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 border-none' :
+                                                                                        'bg-red-100 text-red-700 border-none'
+                                                                            }>
+                                                                                {res.status}
+                                                                            </Badge>
+                                                                        </td>
+                                                                        <td className="px-6 py-4 text-right">
+                                                                            {res.status === 'pending' && (
+                                                                                <div className="flex justify-end gap-2">
+                                                                                    <Button
+                                                                                        size="sm"
+                                                                                        variant="outline"
+                                                                                        className="h-8 w-8 p-0 text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
+                                                                                        onClick={() => handleStatusUpdate(res.id, 'rejected')}
+                                                                                    >
+                                                                                        <X className="h-4 w-4" />
+                                                                                    </Button>
+                                                                                    <Button
+                                                                                        size="sm"
+                                                                                        variant="outline"
+                                                                                        className="h-8 w-8 p-0 text-green-600 hover:text-green-700 hover:bg-green-50 border-green-200"
+                                                                                        onClick={() => handleStatusUpdate(res.id, 'confirmed')}
+                                                                                    >
+                                                                                        <Check className="h-4 w-4" />
+                                                                                    </Button>
+                                                                                </div>
+                                                                            )}
+                                                                        </td>
+                                                                    </tr>
+                                                                ))}
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                </>
                                             )}
                                         </div>
                                     </CardContent>

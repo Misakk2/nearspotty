@@ -57,17 +57,18 @@ export function ReservationModal({ placeId, placeName, trigger, isOpen, onClose 
                 userId: user?.uid || "anonymous",
                 placeId,
                 placeName,
+                customerName: name,
+                customerEmail: user?.email || "",
+                customerPhone: phone,
                 date: date, // Firestore will convert Date
                 time,
                 guests,
-                contactName: name,
-                contactPhone: phone,
-                status: "confirmed", // Mock auto-confirm
+                status: "pending", // Requires owner confirmation
                 createdAt: serverTimestamp(),
             });
 
             setSuccess(true);
-            toast.success("Reservation confirmed!");
+            toast.success("Reservation submitted!");
         } catch (error) {
             console.error(error);
             toast.error("Failed to make reservation");
@@ -91,9 +92,9 @@ export function ReservationModal({ placeId, placeName, trigger, isOpen, onClose 
                         <div className="h-12 w-12 rounded-full bg-green-100 flex items-center justify-center">
                             <CheckCircle2 className="h-6 w-6 text-green-600" />
                         </div>
-                        <DialogTitle className="text-xl">Booking Confirmed!</DialogTitle>
+                        <DialogTitle className="text-xl">Reservation Submitted!</DialogTitle>
                         <DialogDescription>
-                            You are booked at <strong>{placeName}</strong> for {guests} people on {date && format(date, "PPP")} at {time}.
+                            Your reservation at <strong>{placeName}</strong> for {guests} people on {date && format(date, "PPP")} at {time} is pending confirmation from the restaurant.
                         </DialogDescription>
                         <Button onClick={reset} className="w-full">Done</Button>
                     </div>

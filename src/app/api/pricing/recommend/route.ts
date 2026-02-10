@@ -6,7 +6,7 @@ const genAI = new GoogleGenerativeAI(apiKey);
 
 export async function POST(request: NextRequest) {
     try {
-        const { location, cuisineType, avgCheckSize } = await request.json();
+        const { location, cuisineType, avgCheckSize, seats, priceLevel } = await request.json();
 
         // Use Mock if no key (safe for CI/Dev without keys)
         if (!apiKey) {
@@ -25,21 +25,38 @@ export async function POST(request: NextRequest) {
             generationConfig: { responseMimeType: "application/json" }
         });
 
-        const prompt = `You are an expert restaurant revenue manager.
-        Analyze the following restaurant context:
-        - Location: ${location}
-        - Cuisine: ${cuisineType}
-        - Average Check Size: €${avgCheckSize}
+        const priceLevelDesc = priceLevel === 4 ? "Very Expensive (€€€€)" : 
+                              priceLevel === 3 ? "Expensive (€€€)" : 
+                              priceLevel === 2 ? "Moderate (€€)" : "Inexpensive (€)";
 
-        Recommend an optimal reservation deposit amount (in EUR) to minimize no-shows while maintaining booking conversion.
+        const prompt = `You are an expert restaurant revenue manager specializing in European dining markets.
+        Analyze the following restaurant profile to recommend optimal reservation deposit strategy:
+        
+        Restaurant Profile:
+        - Location: ${location}
+        - Cuisine Type: ${cuisineType}
+        - Average Check Size: €${avgCheckSize}
+        - Seating Capacity: ${seats || 'Not specified'} seats
+        - Price Category: ${priceLevelDesc} (Level ${priceLevel || 'Unknown'})
+
+        Based on this specific restaurant's location (city/neighborhood market dynamics), cuisine type popularity, 
+        price positioning, and capacity constraints, recommend an optimal reservation deposit amount (in EUR) 
+        that will minimize no-shows while maintaining strong booking conversion rates.
+
+        Consider:
+        - Local market standards for this cuisine and price point
+        - Competitive positioning based on price level
+        - Capacity management (higher deposits justified for high-demand small venues)
+        - Customer psychology (deposit should feel fair, not prohibitive)
+
         Provide the response in the following JSON format:
         {
             "recommendedDeposit": number,
-            "reasoning": "string (short, max 2 sentences)",
+            "reasoning": "string (2-3 sentences explaining why this deposit is optimal for THIS specific restaurant)",
             "projectedNoShowRate": number (percentage, e.g. 5.5),
             "projectedBookingRate": number (percentage, e.g. 85.0),
             "marketContext": {
-                "similarCount": number (estimate number of similar venues analyzed)
+                "similarCount": number (estimate number of similar venues in this market)
             }
         }
         `;

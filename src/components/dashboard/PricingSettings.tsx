@@ -5,8 +5,12 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Badge } from "@/components/ui/badge";
-import { Sparkles, Brain, Info, TrendingDown, TrendingUp } from "lucide-react";
+import { Sparkles, Brain, Info, TrendingDown, TrendingUp, Lock } from "lucide-react";
 import toast from "react-hot-toast";
+import { doc, updateDoc } from "firebase/firestore";
+import { db } from "@/lib/firebase";
+import { useAuth } from "@/components/auth-provider";
+import { BUSINESS_LIMITS } from "@/lib/plan-limits";
 
 interface PricingRecommendation {
     recommendedDeposit: number;
@@ -19,25 +23,46 @@ interface PricingRecommendation {
 }
 
 export default function PricingSettings({
+    placeId,
     location,
     cuisine,
-    avgCheck
+    avgCheck,
+    seats,
+    priceLevel
 }: {
+    placeId: string;
     location: string;
     cuisine: string;
-    avgCheck: number
+    avgCheck: number;
+    seats?: number;
+    priceLevel?: number;
 }) {
+    const { subscriptionTier } = useAuth();
     const [loading, setLoading] = useState(false);
+    const [saving, setSaving] = useState(false);
     const [recommendation, setRecommendation] = useState<PricingRecommendation | null>(null);
     const [userDeposit, setUserDeposit] = useState(0);
 
+    // Check if user has access to AI features
+    const hasAIAccess = BUSINESS_LIMITS[subscriptionTier as keyof typeof BUSINESS_LIMITS]?.aiInsights || false;
+
     const fetchRecommendation = async () => {
+        if (!hasAIAccess) {
+            toast.error("AI Pricing is only available on Pro and Enterprise plans");
+            return;
+        }
         setLoading(true);
         try {
             const res = await fetch("/api/pricing/recommend", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ location, cuisineType: cuisine, avgCheckSize: avgCheck })
+                body: JSON.stringify({ 
+                    location, 
+                    cuisineType: cuisine, 
+                    avgCheckSize: avgCheck,
+                    seats: seats || 50,
+                    priceLevel: priceLevel || 2
+                })
             });
             const data = await res.json();
             if (data.error) throw new Error(data.error);
@@ -51,13 +76,62 @@ export default function PricingSettings({
         }
     };
 
+    const handleApplyStrategy = async () => {
+        if (!placeId) {
+            toast.error("Restaurant not found");
+            return;
+        }
+        setSaving(true);
+        try {
+            const restaurantRef = doc(db, "restaurants", placeId);
+            await updateDoc(restaurantRef, {
+                pricingStrategy: {
+                    depositAmount: userDeposit,
+                    appliedAt: new Date(),
+                    recommendation: recommendation
+                }
+            });
+            toast.success(`Deposit strategy applied: €${userDeposit}`);
+        } catch (error) {
+            console.error("Save error:", error);
+            toast.error("Failed to save pricing strategy");
+        } finally {
+            setSaving(false);
+        }
+    };
+
     useEffect(() => {
-        const load = async () => {
-            await fetchRecommendation();
-        };
-        load();
+        if (hasAIAccess) {
+            fetchRecommendation();
+        }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [location, cuisine, avgCheck]);
+    }, [location, cuisine, avgCheck, hasAIAccess]);
+
+    // Show upgrade prompt if no AI access
+    if (!hasAIAccess) {
+        return (
+            <Card className="border-2 border-gray-200 shadow-xl overflow-hidden">
+                <CardHeader className="bg-gradient-to-r from-gray-100 to-gray-50 p-8">
+                    <div className="flex items-center gap-3">
+                        <Lock className="h-6 w-6 text-gray-400" />
+                        <div>
+                            <CardTitle className="text-2xl font-bold text-gray-700">Smart Pricing Recommendation</CardTitle>
+                            <CardDescription className="text-gray-500 font-medium">AI-driven deposit optimization</CardDescription>
+                        </div>
+                    </div>
+                </CardHeader>
+                <CardContent className="p-8 text-center space-y-4">
+                    <Lock className="h-16 w-16 mx-auto text-gray-300" />
+                    <h3 className="text-xl font-bold text-gray-700">Upgrade to Pro or Enterprise</h3>
+                    <p className="text-gray-600">AI Pricing features are available on Pro and Enterprise plans.</p>
+                    <Button onClick={() => window.location.href = "/for-restaurants#pricing"} className="mt-4">
+                        <Sparkles className="h-4 w-4 mr-2" />
+                        View Plans
+                    </Button>
+                </CardContent>
+            </Card>
+        );
+    }
 
     if (!recommendation && !loading) return null;
 
@@ -151,8 +225,12 @@ export default function PricingSettings({
                             <p className="text-xs text-gray-400 italic">
                                 Based on data from {recommendation?.marketContext.similarCount} similar restaurants in {location}.
                             </p>
-                            <Button className="rounded-full px-8 font-bold shadow-lg">
-                                Apply Strategy
+                            <Button 
+                                className="rounded-full px-8 font-bold shadow-lg" 
+                                onClick={handleApplyStrategy}
+                                disabled={saving}
+                            >
+                                {saving ? "Saving..." : "Apply Strategy"}
                             </Button>
                         </div>
                     </>

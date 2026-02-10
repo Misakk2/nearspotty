@@ -14,16 +14,22 @@ import toast, { Toaster } from "react-hot-toast";
 
 export default function LoginPage() {
     const router = useRouter();
-    const { user, userRole, loading: authLoading } = useAuth();
+    const { user, userRole, loading: authLoading, completedOnboarding } = useAuth();
     const [loading, setLoading] = useState(false);
 
     useEffect(() => {
-        if (!authLoading && user) {
-            if (userRole === "owner") router.push("/dashboard");
-            else if (userRole === "diner") router.push("/search");
-            else router.push("/onboarding");
+        // Wait for auth to fully load AND userRole to be determined
+        if (!authLoading && user && userRole !== null) {
+            // Redirect based on role and onboarding status
+            if (userRole === "owner") {
+                router.push("/dashboard");
+            } else if (userRole === "diner") {
+                router.push(completedOnboarding ? "/search" : "/onboarding");
+            } else if (userRole === "no_role") {
+                router.push("/onboarding");
+            }
         }
-    }, [user, userRole, authLoading, router]);
+    }, [user, userRole, authLoading, completedOnboarding, router]);
 
     const handleEmailLogin = async (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
@@ -34,8 +40,8 @@ export default function LoginPage() {
 
         try {
             await signInWithEmailAndPassword(auth, email, password);
-            // toast.success("Logged in successfully!"); // Toast might not show if we redirect immediately
-            router.push("/onboarding");
+            toast.success("Logged in successfully!");
+            // useEffect will handle redirect after role is loaded
         } catch (error: unknown) {
             console.error(error);
             const message = error instanceof Error ? error.message : "Failed to login";
@@ -50,9 +56,8 @@ export default function LoginPage() {
         try {
             const provider = new GoogleAuthProvider();
             await signInWithPopup(auth, provider);
-            // Check if new user? Usually we redirect to onboarding regardless, or check if onboarded.
-            // For now, redirect to onboarding per instructions.
-            router.push("/onboarding");
+            toast.success("Logged in successfully!");
+            // useEffect will handle redirect after role is loaded
         } catch (error: unknown) {
             console.error(error);
             const message = error instanceof Error ? error.message : "Failed to login with Google";

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Plus, Trash2, Edit2, Loader2 } from "lucide-react";
+import { Plus, Trash2, Edit2, Loader2, Sparkles, Lightbulb, Lock, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -23,6 +23,7 @@ import { db, storage } from "@/lib/firebase";
 import { doc, getDoc, collection, getDocs, setDoc, deleteDoc, writeBatch } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { Badge } from "@/components/ui/badge";
+import { BUSINESS_LIMITS } from "@/lib/plan-limits";
 
 interface MenuItem {
     id: string;
@@ -41,12 +42,22 @@ const ALLERGENS = ["Gluten", "Dairy", "Nuts", "Soy", "Eggs", "Fish", "Shellfish"
 const DIETARY = ["Vegetarian", "Vegan", "Gluten-Free", "Spicy", "Paleo", "Keto", "Lactose-Free", "Kosher", "Halal"];
 
 export function MenuEditor({ placeId }: { placeId: string }) {
-    const { user } = useAuth();
+    const { user, subscriptionTier } = useAuth();
     const [items, setItems] = useState<MenuItem[]>([]);
     const [loading, setLoading] = useState(true);
     const [isDialogOpen, setIsDialogOpen] = useState(false);
     const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
     const [uploadingImage, setUploadingImage] = useState(false);
+
+    // AI Suggestions State
+    const [aiSuggestionsOpen, setAiSuggestionsOpen] = useState(false);
+    const [aiLoading, setAiLoading] = useState(false);
+    const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
+    const [aiReasoning, setAiReasoning] = useState("");
+    const [customerCount, setCustomerCount] = useState(0);
+
+    // Check if user has access to AI features
+    const hasAIAccess = BUSINESS_LIMITS[subscriptionTier as keyof typeof BUSINESS_LIMITS]?.aiInsights || false;
 
     // Form State
     const [formData, setFormData] = useState<Partial<MenuItem>>({
@@ -214,6 +225,54 @@ export function MenuEditor({ placeId }: { placeId: string }) {
         setEditingItem(null);
     };
 
+    const fetchAISuggestions = async () => {
+        if (!hasAIAccess) {
+            toast.error("AI Menu Guide is only available on Pro and Enterprise plans");
+            return;
+        }
+
+        setAiLoading(true);
+        setAiSuggestionsOpen(true);
+        try {
+            // Get restaurant data to get cuisine type
+            const restaurantRef = doc(db, "restaurants", placeId);
+            const restaurantSnap = await getDoc(restaurantRef);
+            const cuisineType = restaurantSnap.exists() 
+                ? (restaurantSnap.data().cuisine || "International")
+                : "International";
+
+            const res = await fetch("/api/menu/ai-suggest", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ placeId, cuisineType })
+            });
+
+            const data = await res.json();
+            
+            if (data.error) {
+                toast.error(data.error);
+                setAiSuggestionsOpen(false);
+                return;
+            }
+
+            setAiSuggestions(data.suggestions || []);
+            setAiReasoning(data.reasoning || "");
+            setCustomerCount(data.customerCount || 0);
+            
+            if (data.suggestions && data.suggestions.length > 0) {
+                toast.success("AI suggestions generated!");
+            } else {
+                toast.info(data.message || "Not enough data yet");
+            }
+        } catch (error) {
+            console.error("AI Suggestions Error:", error);
+            toast.error("Failed to get AI suggestions");
+            setAiSuggestionsOpen(false);
+        } finally {
+            setAiLoading(false);
+        }
+    };
+
     const openEdit = (item: MenuItem) => {
         setEditingItem(item);
         setFormData(item);
@@ -242,12 +301,28 @@ export function MenuEditor({ placeId }: { placeId: string }) {
 
     return (
         <div className="space-y-6">
-            <div className="flex justify-between items-center">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                 <div>
                     <h2 className="text-2xl font-semibold tracking-tight">Menu Management</h2>
                     <p className="text-muted-foreground">Manage your dishes, drinks, and specials.</p>
                 </div>
-                <Dialog open={isDialogOpen} onOpenChange={(open) => { setIsDialogOpen(open); if (!open) resetForm(); }}>
+                <div className="flex gap-2">
+                    <Button
+                        onClick={fetchAISuggestions}
+                        variant="outline"
+                        className="border-primary/30 hover:bg-primary/5"
+                        disabled={aiLoading || !hasAIAccess}
+                    >
+                        {aiLoading ? (
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        ) : hasAIAccess ? (
+                            <Sparkles className="h-4 w-4 mr-2 text-primary" />
+                        ) : (
+                            <Lock className="h-4 w-4 mr-2" />
+                        )}
+                        {aiLoading ? "Analyzing..." : "Get AI Suggestions"}
+                    </Button>
+                    <Dialog open={isDialogOpen} onOpenChange={(open) => { setIsDialogOpen(open); if (!open) resetForm(); }}>
                     <DialogTrigger asChild>
                         <Button><Plus className="h-4 w-4 mr-2" /> Add Item</Button>
                     </DialogTrigger>
@@ -347,6 +422,7 @@ export function MenuEditor({ placeId }: { placeId: string }) {
                         </DialogFooter>
                     </DialogContent>
                 </Dialog>
+                </div>
             </div>
 
             {items.length === 0 ? (
@@ -405,6 +481,62 @@ export function MenuEditor({ placeId }: { placeId: string }) {
                     })}
                 </div>
             )}
+
+            {/* AI Suggestions Dialog */}
+            <Dialog open={aiSuggestionsOpen} onOpenChange={setAiSuggestionsOpen}>
+                <DialogContent className="sm:max-w-2xl">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2">
+                            <Lightbulb className="h-5 w-5 text-primary" />
+                            Smart Menu Guide - AI Recommendations
+                        </DialogTitle>
+                        <DialogDescription>
+                            Based on preferences from {customerCount} regular customers
+                        </DialogDescription>
+                    </DialogHeader>
+                    
+                    <div className="space-y-4 max-h-[60vh] overflow-y-auto">
+                        {aiSuggestions.length === 0 && !aiLoading && (
+                            <div className="text-center py-8 text-muted-foreground">
+                                <Lightbulb className="h-12 w-12 mx-auto mb-3 opacity-20" />
+                                <p>Not enough customer data yet.</p>
+                                <p className="text-sm">AI recommendations will improve as you get more reservations.</p>
+                            </div>
+                        )}
+                        
+                        {aiSuggestions.length > 0 && (
+                            <>
+                                <div className="space-y-3">
+                                    {aiSuggestions.map((suggestion, index) => (
+                                        <Card key={index} className="p-4 bg-gradient-to-br from-primary/5 to-transparent border-primary/20">
+                                            <div className="flex gap-3">
+                                                <div className="flex-shrink-0 w-6 h-6 rounded-full bg-primary text-white flex items-center justify-center text-sm font-bold">
+                                                    {index + 1}
+                                                </div>
+                                                <p className="text-sm leading-relaxed flex-1">{suggestion}</p>
+                                            </div>
+                                        </Card>
+                                    ))}
+                                </div>
+                                
+                                {aiReasoning && (
+                                    <div className="mt-4 p-4 bg-gray-50 rounded-lg border">
+                                        <h4 className="font-semibold text-sm mb-2 flex items-center gap-2">
+                                            <Info className="h-4 w-4" />
+                                            Why These Suggestions?
+                                        </h4>
+                                        <p className="text-sm text-gray-600 italic">&quot;{aiReasoning}&quot;</p>
+                                    </div>
+                                )}
+                            </>
+                        )}
+                    </div>
+                    
+                    <DialogFooter>
+                        <Button onClick={() => setAiSuggestionsOpen(false)}>Close</Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }
