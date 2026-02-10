@@ -262,7 +262,7 @@ export function MenuEditor({ placeId }: { placeId: string }) {
             if (data.suggestions && data.suggestions.length > 0) {
                 toast.success("AI suggestions generated!");
             } else {
-                toast.info(data.message || "Not enough data yet");
+                toast(data.message || "Not enough data yet");
             }
         } catch (error) {
             console.error("AI Suggestions Error:", error);

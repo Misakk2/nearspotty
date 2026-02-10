@@ -19,10 +19,13 @@ import {
     Sparkles,
     ArrowRight,
     Check,
-    X
+    X,
+    LogOut
 } from "lucide-react";
 import { doc, getDoc, collection, query, getDocs, orderBy, Timestamp, where } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { db, auth } from "@/lib/firebase";
+import { signOut } from "firebase/auth";
+import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import toast from "react-hot-toast";
 import { BusinessPlan, BUSINESS_LIMITS, PLAN_TO_PRICE } from "@/lib/plan-limits";
@@ -46,6 +49,7 @@ interface Reservation {
 
 export default function BusinessDashboard() {
     const { user } = useAuth();
+    const router = useRouter();
     const [reservations, setReservations] = useState<Reservation[]>([]);
     const [loading, setLoading] = useState(true);
     const [portalLoading, setPortalLoading] = useState(false);
@@ -322,6 +326,23 @@ export default function BusinessDashboard() {
                                     <Sparkles className="h-4 w-4 mr-2 text-primary fill-primary/20" />
                                     {userPlan === "free" ? "Free Plan" : `${userPlan.charAt(0).toUpperCase() + userPlan.slice(1)} Plan`}
                                 </Badge>
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={async () => {
+                                        try {
+                                            await signOut(auth);
+                                            toast.success("Logged out successfully");
+                                            router.push("/");
+                                        } catch (error) {
+                                            console.error("Logout error:", error);
+                                            toast.error("Failed to logout");
+                                        }
+                                    }}
+                                >
+                                    <LogOut className="h-4 w-4 mr-2" />
+                                    Logout
+                                </Button>
                             </div>
                         </div>
 

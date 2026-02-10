@@ -19,19 +19,21 @@ export async function POST(request: NextRequest) {
         const ninetyDaysAgo = new Date();
         ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
 
+        // Query with only placeId and date to avoid needing composite index
+        // Filter by status in memory
         const reservationsSnapshot = await db
             .collection("reservations")
             .where("placeId", "==", placeId)
-            .where("status", "==", "confirmed")
             .where("date", ">=", ninetyDaysAgo)
-            .limit(100)
+            .limit(200) // Increased limit since we'll filter in memory
             .get();
 
-        // Collect unique user IDs
+        // Collect unique user IDs from confirmed reservations only
         const userIds = new Set<string>();
         reservationsSnapshot.forEach((doc) => {
             const data = doc.data();
-            if (data.userId && data.userId !== "anonymous") {
+            // Filter for confirmed reservations in memory
+            if (data.status === "confirmed" && data.userId && data.userId !== "anonymous") {
                 userIds.add(data.userId);
             }
         });
